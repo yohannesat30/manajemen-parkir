@@ -9,25 +9,32 @@ import os
 # Nama file untuk menyimpan data
 FILE_PARKIR = 'parking_data.json'
 
+# Jumlah data yang diminta untuk dihapus massal
+JUMLAH_HAPUS_MASSAL = 40
+
 # ===============================
 #       DATA MODEL (LINKED LIST & OOP Lanjutan)
 # ===============================
 
 class Kendaraan:
+    """Kelas dasar untuk kendaraan, mendemonstrasikan Basic OOP."""
     def __init__(self, nomor_polisi, jenis_kendaraan):
         self.nomor_polisi = nomor_polisi
         self.jenis_kendaraan = jenis_kendaraan
         self._tarif_dasar = 0
     
     def get_tarif_dasar(self):
+        """Method untuk mendapatkan tarif dasar, bisa di-override."""
         return self._tarif_dasar
 
 class Node(Kendaraan):
+    """Representasi data parkir, menggunakan Linked List Node."""
     def __init__(self, nomor_polisi, jenis_kendaraan, waktu_masuk_str):
         super().__init__(nomor_polisi, jenis_kendaraan)
         
         self.waktu_masuk = datetime.strptime(waktu_masuk_str, "%H:%M")
 
+        # Catatan: Durasi parkir disimulasikan 
         lama = random.randint(30, 720)  
         self.waktu_keluar = self.waktu_masuk + timedelta(minutes=lama)
         self.durasi_parkir = self.waktu_keluar - self.waktu_masuk
@@ -44,6 +51,7 @@ class Node(Kendaraan):
         return 3000
 
     def hit_biaya(self):
+        """Menghitung biaya parkir berdasarkan durasi dan jenis kendaraan."""
         jam_total = int(self.durasi_parkir.total_seconds() // 3600)
         jam_total = max(1, jam_total)
         
@@ -59,6 +67,7 @@ class Node(Kendaraan):
         return biaya
         
     def to_dict(self):
+        """Fungsi pembantu untuk konversi ke Dictionary untuk File Handling (JSON)."""
         return {
             "nomor_polisi": self.nomor_polisi,
             "jenis_kendaraan": self.jenis_kendaraan,
@@ -70,28 +79,26 @@ class Node(Kendaraan):
 
 
 class DataParkir:
+    """Class utama untuk mengelola data parkir menggunakan Linked List."""
     def __init__(self):
         self.head = None
         self.load_data()
 
-    # File Handling (Load Data) - Indentasi diperiksa secara ketat di sini
+    # File Handling (Load Data)
     def load_data(self):
+        """Memuat data dari FILE_PARKIR (JSON) saat aplikasi dimulai."""
         if os.path.exists(FILE_PARKIR):
             try:
                 with open(FILE_PARKIR, 'r') as f:
                     data_list = json.load(f)
                     for data in data_list:
-                        # Baris 85
                         node = Node(data['nomor_polisi'], data['jenis_kendaraan'], data['waktu_masuk'])
-                        # Memperbarui properti
                         node.waktu_keluar = datetime.strptime(data['waktu_keluar'], "%H:%M")
                         node.durasi_parkir = node.waktu_keluar - node.waktu_masuk
-                        # Baris 95
                         node.biaya_parkir = node.hit_biaya() 
                         node.status_pembayaran = data['status_pembayaran']
                         node.metode_bayar = data['metode_bayar']
                         
-                        # Menambahkan node ke linked list
                         if not self.head:
                             self.head = node
                         else:
@@ -99,7 +106,6 @@ class DataParkir:
                             while cur.next:
                                 cur = cur.next
                             cur.next = node
-            # Indentasi blok except harus sejajar dengan try
             except json.JSONDecodeError:
                 st.warning("Gagal memuat data parkir (file JSON rusak).")
             except Exception as e:
@@ -107,6 +113,7 @@ class DataParkir:
 
     # File Handling (Save Data)
     def save_data(self):
+        """Menyimpan data Linked List ke FILE_PARKIR (JSON)."""
         data_to_save = [d.to_dict() for d in self.all_data()]
         try:
             with open(FILE_PARKIR, 'w') as f:
@@ -114,6 +121,7 @@ class DataParkir:
         except Exception as e:
             st.error(f"Gagal menyimpan data ke file: {e}")
 
+    # Method Linked List (Add)
     def add(self, nomor_polisi, jenis, waktu):
         if self.search(nomor_polisi):
             return False 
@@ -130,6 +138,7 @@ class DataParkir:
         self.save_data()
         return True
 
+    # Method Linked List (Search)
     def search(self, nomor_polisi):
         cur = self.head
         while cur:
@@ -138,6 +147,7 @@ class DataParkir:
             cur = cur.next
         return None
 
+    # Method Linked List (Delete)
     def delete(self, nomor_polisi):
         if not self.head:
             return False
@@ -156,6 +166,23 @@ class DataParkir:
             cur = cur.next
         return False
         
+    # Method Baru: Hapus N Data Pertama
+    def delete_n_entries(self, n):
+        deleted_count = 0
+        current_data = self.all_data()
+        
+        # Ambil Nomor Polisi dari N data pertama
+        nopol_to_delete = [d.nomor_polisi for d in current_data[:n]]
+        
+        # Hapus satu per satu menggunakan method delete() yang sudah ada
+        for nopol in nopol_to_delete:
+            if self.delete(nopol):
+                deleted_count += 1
+                
+        # self.delete() sudah memanggil save_data(), jadi data sudah tersimpan.
+        return deleted_count
+
+    # Method untuk Pembayaran
     def bayar(self, nomor_polisi, metode):
         node = self.search(nomor_polisi)
         if node and node.status_pembayaran == "Belum Bayar":
@@ -165,6 +192,7 @@ class DataParkir:
             return True
         return False
 
+    # Method Linked List (All Data)
     def all_data(self):
         data = []
         cur = self.head
@@ -173,6 +201,7 @@ class DataParkir:
             cur = cur.next
         return data
 
+    # Method to DataFrame
     def to_df(self, data_list):
         return pd.DataFrame([
             {
@@ -209,17 +238,29 @@ METODE_PEMBAYARAN = {
 }
 
 # ===============================
-#       FITUR RESET DATA 
+#       FITUR RESET DATA / HAPUS MASSAL
 # ===============================
 
 st.subheader("🗑️ Kelola Data Persisten")
 
-if st.button("Hapus Semua Data Parkir (Reset File)", help="Ini akan menghapus semua data yang tersimpan di memori dan file parking_data.json."):
-    if os.path.exists(FILE_PARKIR):
-        os.remove(FILE_PARKIR)
-    st.session_state.parkir = DataParkir() 
-    st.success("Semua data parkir berhasil dihapus! Aplikasi direset.")
-    st.rerun() 
+col_reset1, col_reset2 = st.columns(2)
+
+with col_reset1:
+    if st.button("Hapus Semua Data Parkir (Reset File)", help="Menghapus semua data yang tersimpan di memori dan file parking_data.json."):
+        if os.path.exists(FILE_PARKIR):
+            os.remove(FILE_PARKIR)
+        st.session_state.parkir = DataParkir() 
+        st.success("Semua data parkir berhasil dihapus! Aplikasi direset.")
+        st.rerun() 
+
+with col_reset2:
+    if st.button(f"Hapus {JUMLAH_HAPUS_MASSAL} Data Parkir Pertama (Massal)"):
+        deleted_count = parkir.delete_n_entries(JUMLAH_HAPUS_MASSAL)
+        if deleted_count > 0:
+            st.success(f"Berhasil menghapus **{deleted_count}** data parkir pertama. Data telah **disimpan**.")
+            st.rerun()
+        else:
+            st.info("Tidak ada data parkir yang dihapus (mungkin data yang tersisa kurang dari 40).")
 
 
 # ===============================
@@ -259,6 +300,7 @@ col_bayar1, col_bayar2, col_bayar3 = st.columns(3)
 with col_bayar1:
     bayar_nopol = st.text_input("Nomor Polisi Kendaraan Keluar", key="bayar_nopol")
 with col_bayar2:
+    # Koreksi SyntaxError sebelumnya sudah diterapkan di sini
     bayar_metode = st.selectbox("Metode Pembayaran", list(METODE_PEMBAYARAN.keys()), key="bayar_metode")
 with col_bayar3:
     st.write(" ")
