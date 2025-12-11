@@ -143,23 +143,18 @@ else:
 st.header("➕ Input Kendaraan Masuk")
 nopol = st.text_input("Nomor Polisi")
 jenis = st.selectbox("Jenis", ["Mobil", "Motor"])
-
-# Tanggal dipilih lewat calendar
 tanggal = st.date_input("Tanggal Masuk", date.today())
 
-# Jam masuk manual (jam & menit)
-jam_manual = st.number_input("Jam Masuk (0-23)", min_value=0, max_value=23, value=datetime.now().hour)
-menit_manual = st.number_input("Menit Masuk (0-59)", min_value=0, max_value=59, value=datetime.now().minute)
-
-# Gabungkan tanggal & jam
-waktu_manual = datetime.combine(tanggal, datetime.min.time()).replace(hour=jam_manual, minute=menit_manual)
+# Waktu masuk manual
+waktu_manual = st.time_input("Jam & Menit Masuk", value=datetime.now().time())
+waktu_masuk = datetime.combine(tanggal, waktu_manual)
 
 if st.button("Tambah Kendaraan"):
     if not nopol.strip():
         st.error("Nomor polisi wajib diisi.")
     else:
         try:
-            manager.add(nopol, jenis, waktu_manual.strftime("%Y-%m-%d %H:%M"))
+            manager.add(nopol, jenis, waktu_masuk.strftime("%Y-%m-%d %H:%M"))
             st.success(f"Data kendaraan {nopol} berhasil ditambahkan.")
         except Exception as e:
             st.error(f"Terjadi kesalahan saat menambahkan data: {e}")
