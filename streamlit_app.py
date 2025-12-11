@@ -110,7 +110,7 @@ class ParkingManager:
         }
 
 # ===============================
-#       STREAMLIT UI SEDERHANA
+#       STREAMLIT UI
 # ===============================
 st.set_page_config(page_title="Sistem Parkir Outlet", layout="wide")
 st.title("🏢 Sistem Manajemen Data Parkir Outlet Bisnis")
@@ -119,10 +119,13 @@ if "manager" not in st.session_state:
     st.session_state.manager = ParkingManager()
 manager = st.session_state.manager
 
+# -------------------------------
 # Dashboard
+# -------------------------------
 st.header("📊 Dashboard Parkir")
 df = manager.to_dataframe()
 st.dataframe(df, use_container_width=True)
+
 stats = manager.statistics_today()
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Pendapatan Hari Ini", f"Rp {stats['pendapatan']:,}")
@@ -130,7 +133,9 @@ c2.metric("Mobil Masuk", stats["mobil"])
 c3.metric("Motor Masuk", stats["motor"])
 c4.metric("Transaksi Selesai", stats["transaksi"])
 
+# -------------------------------
 # Kendaraan parkir >24 jam
+# -------------------------------
 st.subheader("⏰ Kendaraan Parkir > 24 Jam")
 over = manager.overdue_records()
 if over:
@@ -139,15 +144,16 @@ if over:
 else:
     st.success("Tidak ada kendaraan yang parkir lebih dari 24 jam.")
 
+# -------------------------------
 # Input kendaraan masuk
+# -------------------------------
 st.header("➕ Input Kendaraan Masuk")
 nopol = st.text_input("Nomor Polisi")
 jenis = st.selectbox("Jenis", ["Mobil", "Motor"])
 tanggal = st.date_input("Tanggal Masuk", date.today())
-
-# Waktu masuk manual
 waktu_manual = st.time_input("Jam & Menit Masuk", value=datetime.now().time())
 waktu_masuk = datetime.combine(tanggal, waktu_manual)
+st.info(f"Waktu Masuk yang dipilih: {waktu_masuk.strftime('%Y-%m-%d %H:%M')}")
 
 if st.button("Tambah Kendaraan"):
     if not nopol.strip():
@@ -159,7 +165,9 @@ if st.button("Tambah Kendaraan"):
         except Exception as e:
             st.error(f"Terjadi kesalahan saat menambahkan data: {e}")
 
+# -------------------------------
 # Cari / Hapus kendaraan
+# -------------------------------
 st.header("🔍 Cari / Hapus Data Kendaraan")
 key_search = st.text_input("Nomor Polisi untuk Cari/Hapus")
 c1, c2 = st.columns(2)
@@ -179,7 +187,9 @@ with c2:
         else:
             st.error("Nomor polisi tidak ditemukan.")
 
+# -------------------------------
 # Checkout / Pembayaran
+# -------------------------------
 st.header("💳 Pembayaran / Checkout")
 key_checkout = st.text_input("Nomor Polisi untuk Checkout", key="checkout_key")
 
