@@ -1,158 +1,403 @@
+# app_patch_qr.py
 import streamlit as st
+import random
+import string
 from datetime import datetime, timedelta
-from io import BytesIO
+import pandas as pd
+import io
+import re
+import os
+from urllib.parse import quote_plus
+import requests  # ADDED: untuk mengunduh image QR
 
-# ============== QR CODE (PURE PYTHON FALLBACK) ====================
+# -------------------------------
+# Configuration / Constants
+# -------------------------------
+DATA_FILE = "parkir_data.csv"
+PLATE_REGEX = r"^[A-Z]{1,2}\s?\d{1,4}\s?[A-Z]{1,3}$"
+DEFAULT_PAYMENT_METHODS = ["Cash", "QRIS", "Debit", "E-Wallet"]
+KNOWN_BRANDS = {"Toyota", "Honda", "Suzuki", "Daihatsu", "Yamaha", "Kawasaki", "BMW", "Mercedes", "Other"}
 
-# Coba import qrcode — jika tidak ada, gunakan fallback
-try:
-    import qrcode
-    from PIL import Image
-    QR_AVAILABLE = True
-except:
-    QR_AVAILABLE = False
+# ===============================
+#     DATA MODEL (LINKED LIST)
+# ===============================
+class Node:
+    def __init__(self, nomor_polisi, jenis_kendaraan, waktu_masuk_str,
+                 metode_bayar="Cash", merk="Other", waktu_keluar_str=None, status_bayar="Belum Dibayar"):
+        self.nomor_polisi = nomor_polisi.strip().upper()
+        self.jenis_kendaraan = jenis_kendaraan
+        self.merk = merk if merk in KNOWN_BRANDS else "Other"
+        self.metode_bayar = metode_bayar
+        self.status_bayar = status_bayar
 
-# Fallback QR generator (Pure Python mini QR)
-def generate_qr_fallback(text: str):
-    """QR Code fallback jika 'qrcode' tidak tersedia."""
-    import numpy as np
-    from PIL import Image
-    
-    size = 29  # QR version 1
-    qr_matrix = np.random.choice([0, 255], size=(size, size), p=[0.5, 0.5])
-    
-    img = Image.fromarray(qr_matrix.astype("uint8"), "L")
-    img = img.resize((300, 300), Image.NEAREST)
+        # waktu masuk parsing (HH:MM atau ISO)
+        try:
+            if isinstance(waktu_masuk_str, str) and len(waktu_masuk_str) == 5 and ":" in waktu_masuk_str:
+                t = datetime.strptime(waktu_masuk_str, "%H:%M").time()
+                self.waktu_masuk = datetime.combine(datetime.now().date(), t)
+            else:
+                self.waktu_masuk = datetime.fromisoformat(str(waktu_masuk_str))
+        except Exception:
+            self.waktu_masuk = datetime.now()
 
-    return img
+        # waktu keluar
+        if waktu_keluar_str:
+            try:
+                if isinstance(waktu_keluar_str, str) and len(waktu_keluar_str) == 5 and ":" in waktu_keluar_str:
+                    t = datetime.strptime(waktu_keluar_str, "%H:%M").time()
+                    self.waktu_keluar = datetime.combine(self.waktu_masuk.date(), t)
+                else:
+                    self.waktu_keluar = datetime.fromisoformat(str(waktu_keluar_str))
+            except Exception:
+                self.waktu_keluar = None
+        else:
+            self.waktu_keluar = None
 
+        if self.waktu_keluar:
+            self.durasi_parkir = self.waktu_keluar - self.waktu_masuk
+        else:
+            self.durasi_parkir = datetime.now() - self.waktu_masuk
 
-# Generator utama (gunakan qrcode jika tersedia)
-def generate_qr(text: str):
-    if QR_AVAILABLE:
-        qr = qrcode.QRCode(
-            version=1,
-            box_size=10,
-            border=4,
-            error_correction=qrcode.constants.ERROR_CORRECT_M
-        )
-        qr.add_data(text)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
-        return img
-    else:
-        return generate_qr_fallback(text)
+        self.biaya_parkir = self.hitung_biaya()
+        self.next = None
 
+    def hitung_biaya(self):
+        seconds = max(0, int(self.durasi_parkir.total_seconds()))
+        jam = seconds // 3600
+        if seconds % 3600 != 0:
+            jam += 1
+        jam = max(1, jam)
+        if self.jenis_kendaraan == "Mobil":
+            return 5000 + (jam - 1) * 3000
+        else:
+            return 3000 + (jam - 1) * 2000
 
-# ================== DATABASE SIMPEL =========================
+    def to_dict(self):
+        return {
+            "Nomor Polisi": self.nomor_polisi,
+            "Jenis": self.jenis_kendaraan,
+            "Merk": self.merk,
+            "Metode Bayar": self.metode_bayar,
+            "Status": self.status_bayar,
+            "Masuk": self.waktu_masuk.isoformat(),
+            "Keluar": self.waktu_keluar.isoformat() if self.waktu_keluar else "",
+            "Durasi_s": int(self.durasi_parkir.total_seconds()),
+            "Biaya (Rp)": self.biaya_parkir
+        }
 
-if "database" not in st.session_state:
-    st.session_state.database = {}  # key = nopol
+class DataParkir:
+    def __init__(self):
+        self.head = None
 
-db = st.session_state.database
+    def __iter__(self):
+        cur = self.head
+        while cur:
+            yield cur
+            cur = cur.next
 
+    def add(self, nomor_polisi, jenis, waktu, metode="Cash", merk="Other"):
+        node = Node(nomor_polisi, jenis, waktu, metode, merk)
+        if not self.head:
+            self.head = node
+        else:
+            cur = self.head
+            while cur.next:
+                cur = cur.next
+            cur.next = node
+        return node
 
-# ================== DASHBOARD MENU ==========================
+    def search(self, nomor_polisi):
+        key = nomor_polisi.strip().upper()
+        cur = self.head
+        while cur:
+            if cur.nomor_polisi == key:
+                return cur
+            cur = cur.next
+        return None
 
-st.title("🚗 Sistem Manajemen Parkir")
+    def delete(self, nomor_polisi):
+        key = nomor_polisi.strip().upper()
+        if not self.head:
+            return False
+        if self.head.nomor_polisi == key:
+            self.head = self.head.next
+            return True
+        cur = self.head
+        while cur.next:
+            if cur.next.nomor_polisi == key:
+                cur.next = cur.next.next
+                return True
+            cur = cur.next
+        return False
 
-menu = st.sidebar.selectbox(
-    "Menu",
-    ["Dashboard", "Parkir Masuk", "Parkir Keluar", "Daftar Parkir"]
-)
+    def all_data(self):
+        return list(iter(self))
 
+    def to_df(self):
+        rows = []
+        for n in self:
+            d = n.to_dict()
+            masuk_h = datetime.fromisoformat(d["Masuk"]).strftime("%Y-%m-%d %H:%M")
+            keluar_h = d["Keluar"] and datetime.fromisoformat(d["Keluar"]).strftime("%Y-%m-%d %H:%M") or ""
+            durasi_h = str(timedelta(seconds=d["Durasi_s"]))
+            rows.append({
+                "Nomor Polisi": d["Nomor Polisi"],
+                "Jenis": d["Jenis"],
+                "Merk": d["Merk"],
+                "Metode Bayar": d["Metode Bayar"],
+                "Status": d["Status"],
+                "Masuk": masuk_h,
+                "Keluar": keluar_h,
+                "Durasi": durasi_h,
+                "Biaya (Rp)": d["Biaya (Rp)"]
+            })
+        if rows:
+            return pd.DataFrame(rows)
+        else:
+            cols = ["Nomor Polisi","Jenis","Merk","Metode Bayar","Status","Masuk","Keluar","Durasi","Biaya (Rp)"]
+            return pd.DataFrame(columns=cols)
 
-# ================== DASHBOARD ==========================
+    def save_to_csv(self, filepath=DATA_FILE):
+        df = pd.DataFrame([n.to_dict() for n in self])
+        df.to_csv(filepath, index=False)
 
+    def load_from_csv(self, filepath=DATA_FILE):
+        if isinstance(filepath, io.IOBase) or hasattr(filepath, "read"):
+            df = pd.read_csv(filepath)
+        else:
+            if not os.path.exists(filepath):
+                return
+            df = pd.read_csv(filepath)
+        self.head = None
+        for _, row in df.iterrows():
+            masuk = row.get("Masuk") or row.get("Masuk")
+            keluar = row.get("Keluar", "")
+            self.add(
+                row["Nomor Polisi"],
+                row["Jenis"],
+                masuk,
+                row.get("Metode Bayar", "Cash"),
+                row.get("Merk", "Other")
+            )
+            node = self.search(row["Nomor Polisi"])
+            node.status_bayar = row.get("Status", "Belum Dibayar")
+            if keluar and isinstance(keluar, str) and keluar.strip() != "":
+                try:
+                    node.waktu_keluar = datetime.fromisoformat(keluar)
+                except Exception:
+                    node.waktu_keluar = None
+            node.durasi_parkir = (node.waktu_keluar - node.waktu_masuk) if node.waktu_keluar else (datetime.now() - node.waktu_masuk)
+            node.biaya_parkir = node.hitung_biaya()
+
+# -------------------------------
+# Helper functions
+# -------------------------------
+def valid_plate(plate):
+    return bool(re.match(PLATE_REGEX, plate.strip().upper()))
+
+def gen_random_plate():
+    return f"{random.choice(['B','D','AB','Z'])} {random.randint(100,9999)} {''.join(random.choices(string.ascii_uppercase, k=2))}"
+
+# NEW: download QR bytes via Google Charts API
+def generate_qr_image(text, size=300):
+    base = "https://chart.googleapis.com/chart"
+    params = f"?chs={size}x{size}&cht=qr&chl={quote_plus(text)}&choe=UTF-8"
+    url = base + params
+    try:
+        res = requests.get(url, timeout=8)
+        if res.status_code == 200:
+            return res.content
+        else:
+            return None
+    except Exception:
+        return None
+
+# -------------------------------
+# Streamlit App UI
+# -------------------------------
+st.set_page_config(page_title="Sistem Parkir Lengkap (Patch QR)", layout="wide")
+
+if "parkir" not in st.session_state:
+    st.session_state.parkir = DataParkir()
+    st.session_state.parkir.load_from_csv(DATA_FILE)
+
+parkir = st.session_state.parkir
+
+menu = st.sidebar.radio("📌 Menu", ["Dashboard", "Input Kendaraan", "Pencarian & Pembayaran", "Data Parkir", "Admin / Export"])
+
+st.title("🏢 Sistem Manajemen Parkir (Patch QR)")
+
+# --- Dashboard ---
 if menu == "Dashboard":
-    total_kendaraan = len(db)
-    total_sudah_keluar = sum(1 for p in db.values() if p.get("keluar"))
-    total_masuk = total_kendaraan - total_sudah_keluar
+    st.header("📊 Dashboard")
+    data = parkir.all_data()
+    df = parkir.to_df()
 
-    st.subheader("📊 Dashboard Parkir")
-    st.metric("Total Parkir Masuk", total_masuk)
-    st.metric("Total Parkir Keluar", total_sudah_keluar)
-    st.metric("Total Data Tersimpan", total_kendaraan)
+    total_pendapatan = sum(n.biaya_parkir for n in data) if data else 0
+    jml_mobil = len([n for n in data if n.jenis_kendaraan == "Mobil"])
+    jml_motor = len([n for n in data if n.jenis_kendaraan == "Motor"])
+    jml_belum_bayar = len([n for n in data if n.status_bayar == "Belum Dibayar"])
+    jml_lunas = len([n for n in data if n.status_bayar == "Sudah Dibayar"])
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Pendapatan", f"Rp {total_pendapatan:,}")
+    c2.metric("Jumlah Mobil", jml_mobil)
+    c3.metric("Jumlah Motor", jml_motor)
+    c4.metric("Transaksi Lunas", jml_lunas)
+
+    st.subheader("Ringkasan per Merk")
+    merk_summary = {}
+    for n in data:
+        merk_summary.setdefault(n.merk, 0)
+        merk_summary[n.merk] += 1
+    st.write(merk_summary)
+
+    st.subheader("Notifikasi: Kendaraan > 24 jam (Kemungkinan Tinggal)")
+    old = []
+    for n in data:
+        dur = (datetime.now() - n.waktu_masuk) if not n.waktu_keluar else (n.waktu_keluar - n.waktu_masuk)
+        if not n.waktu_keluar and dur > timedelta(hours=24):
+            old.append((n.nomor_polisi, n.merk, dur))
+    if old:
+        for p, m, d in old:
+            st.warning(f"{p} ({m}) - sudah {str(d)} terparkir (>24 jam).")
+    else:
+        st.success("Tidak ada kendaraan yang terparkir lebih dari 24 jam.")
 
     st.write("---")
-    st.write("Gunakan menu di samping untuk melakukan pencatatan parkir.")
+    st.subheader("Data Terakhir")
+    st.dataframe(df, use_container_width=True)
 
+# --- Input Kendaraan ---
+if menu == "Input Kendaraan":
+    st.header("➕ Input Kendaraan Masuk")
+    col1, col2, col3, col4 = st.columns([2,2,2,2])
+    with col1:
+        inp_nopol = st.text_input("Nomor Polisi (contoh: B 1234 ABC)", value=gen_random_plate())
+    with col2:
+        inp_jenis = st.selectbox("Jenis Kendaraan", ["Mobil", "Motor"])
+    with col3:
+        inp_merk = st.selectbox("Merk Kendaraan", sorted(list(KNOWN_BRANDS)))
+    with col4:
+        inp_waktu = st.time_input("Waktu Masuk (jam:menit)", value=datetime.now().time())
+    metode = st.selectbox("Metode Pembayaran", DEFAULT_PAYMENT_METHODS)
 
-# ================== PARKIR MASUK ==========================
-
-elif menu == "Parkir Masuk":
-    st.subheader("➕ Parkir Masuk")
-
-    nopol = st.text_input("Nomor Polisi (Contoh: L 1234 AB)").upper()
-
-    if st.button("Simpan"):
-        if nopol == "":
-            st.error("Nomor polisi tidak boleh kosong")
-        elif nopol in db and not db[nopol].get("keluar"):
-            st.warning("Kendaraan ini masih dalam area parkir.")
+    if st.button("Tambah Data"):
+        if not inp_nopol.strip():
+            st.error("Nomor polisi wajib diisi.")
+        elif not valid_plate(inp_nopol):
+            st.error("Format nomor polisi tidak valid. Gunakan format STNK-like (contoh: B 1234 ABC).")
         else:
-            masuk_time = datetime.now()
-            db[nopol] = {
-                "masuk": masuk_time,
-                "keluar": None,
-                "durasi": None,
-                "biaya": None,
-            }
-            st.success(f"Data masuk tersimpan untuk {nopol}")
+            time_str = inp_waktu.strftime("%H:%M")
+            parkir.add(inp_nopol, inp_jenis, time_str, metode, inp_merk)
+            st.success("Data berhasil ditambahkan.")
+            parkir.save_to_csv(DATA_FILE)
 
-            # Generate QR
-            qr = generate_qr(f"Tiket Parkir - {nopol} - {masuk_time}")
-            buf = BytesIO()
-            qr.save(buf, format="PNG")
-
-            st.image(buf.getvalue(), caption="QR Tiket Parkir", width=250)
-
-
-# ================== PARKIR KELUAR ==========================
-
-elif menu == "Parkir Keluar":
-    st.subheader("📤 Parkir Keluar")
-
-    nopol = st.text_input("Masukkan Nomor Polisi").upper()
-
-    if st.button("Proses Keluar"):
-        if nopol not in db:
-            st.error("Nomor polisi tidak ditemukan.")
-        elif db[nopol]["keluar"]:
-            st.warning("Kendaraan ini sudah keluar sebelumnya.")
+    st.write("---")
+    st.subheader("Contoh QR Ticket (preview dari input saat ini)")
+    if st.button("Generate contoh tiket QR (dari input saat ini)"):
+        if not valid_plate(inp_nopol):
+            st.error("Nomor polisi belum valid.")
         else:
-            keluar_time = datetime.now()
-            masuk = db[nopol]["masuk"]
-            durasi = keluar_time - masuk
+            text = f"PLAT:{inp_nopol.strip().upper()}|JENIS:{inp_jenis}|MERK:{inp_merk}|WAKTU:{datetime.now().isoformat()}"
+            qr_bytes = generate_qr_image(text, size=300)
+            if qr_bytes:
+                st.image(qr_bytes, caption="QR Ticket", width=250)
+                st.download_button("Download QR PNG", qr_bytes, file_name=f"ticket_{inp_nopol.strip().upper()}.png", mime="image/png")
+            else:
+                st.error("Gagal mengambil QR dari Google API.")
 
-            jam = durasi.total_seconds() / 3600
-            biaya = int(jam * 3000)  # Rp 3.000 per jam
+# --- Pencarian & Pembayaran ---
+if menu == "Pencarian & Pembayaran":
+    st.header("🔍 Cari / Hapus / Proses Pembayaran / Cetak QR")
+    key = st.text_input("Masukkan Nomor Polisi untuk mencari")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("Cari"):
+            node = parkir.search(key)
+            if node:
+                st.success("Data ditemukan")
+                st.write(pd.DataFrame([node.to_dict()]))
+            else:
+                st.warning("Tidak ditemukan.")
+    with col2:
+        if st.button("Hapus"):
+            if parkir.delete(key):
+                st.success("Data dihapus.")
+                parkir.save_to_csv(DATA_FILE)
+            else:
+                st.error("Gagal hapus (tidak ditemukan).")
+    with col3:
+        if st.button("Proses Pembayaran (Tandai Lunas)"):
+            node = parkir.search(key)
+            if node:
+                node.status_bayar = "Sudah Dibayar"
+                if not node.waktu_keluar:
+                    node.waktu_keluar = datetime.now()
+                node.durasi_parkir = node.waktu_keluar - node.waktu_masuk
+                node.biaya_parkir = node.hitung_biaya()
+                parkir.save_to_csv(DATA_FILE)
+                st.success(f"{node.nomor_polisi} sudah dibayar. Biaya: Rp {node.biaya_parkir:,}")
+            else:
+                st.error("Data tidak ditemukan.")
 
-            db[nopol]["keluar"] = keluar_time
-            db[nopol]["durasi"] = durasi
-            db[nopol]["biaya"] = biaya
+    st.write("---")
+    st.subheader("Cetak QR Ticket dari Nomor Polisi")
+    key2 = st.text_input("Nomor Polisi untuk QR")
+    if st.button("Generate QR Ticket"):
+        node = parkir.search(key2)
+        if node:
+            text = f"PLAT:{node.nomor_polisi}|MASUK:{node.waktu_masuk.isoformat()}|BIAYA:{node.biaya_parkir}"
+            qr_bytes = generate_qr_image(text, size=300)
+            if qr_bytes:
+                st.image(qr_bytes, caption="QR Ticket", width=250)
+                st.download_button("Download QR PNG", qr_bytes, file_name=f"ticket_{node.nomor_polisi}.png", mime="image/png")
+            else:
+                st.error("Gagal mengambil QR dari Google API.")
+        else:
+            st.error("Data tidak ditemukan untuk QR.")
 
-            st.success(f"Kendaraan {nopol} berhasil checkout.")
-            st.write(f"Durasi: {durasi}")
-            st.write(f"Biaya Parkir: Rp {biaya:,}")
+# --- Data Parkir ---
+if menu == "Data Parkir":
+    st.header("📋 Data Parkir")
+    df = parkir.to_df()
+    st.dataframe(df, use_container_width=True)
 
+    st.write("---")
+    if st.button("Generate Data Parkir (Simulasi 20)"):
+        for _ in range(20):
+            nomor = gen_random_plate()
+            j = random.choice(["Mobil", "Motor"])
+            w = f"{random.randint(6,22)}:{random.randint(0,59):02d}"
+            m = random.choice(DEFAULT_PAYMENT_METHODS)
+            merk = random.choice(list(KNOWN_BRANDS))
+            parkir.add(nomor, j, w, m, merk)
+        parkir.save_to_csv(DATA_FILE)
+        st.success("Simulasi data ditambahkan.")
 
-# ================== DAFTAR PARKIR ==========================
+# --- Admin / Export ---
+if menu == "Admin / Export":
+    st.header("🔐 Admin / Export")
+    st.write("Penyimpanan saat ini:", DATA_FILE)
+    if st.button("Save Sekarang ke CSV"):
+        parkir.save_to_csv(DATA_FILE)
+        st.success("Tersimpan.")
+    uploaded = st.file_uploader("Import CSV (format export)", type=["csv"])
+    if uploaded:
+        try:
+            parkir.load_from_csv(uploaded)
+            parkir.save_to_csv(DATA_FILE)
+            st.success("Import berhasil.")
+        except Exception as e:
+            st.error(f"Gagal import: {e}")
 
-elif menu == "Daftar Parkir":
-    st.subheader("📋 Daftar Kendaraan")
+    if st.button("Export CSV untuk Download"):
+        df = parkir.to_df()
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button("Download CSV", data=csv, file_name="parkir_export.csv", mime="text/csv")
 
-    if not db:
-        st.write("Belum ada data.")
-    else:
-        for nopol, data in db.items():
-            st.write(f"### {nopol}")
-            st.write(f"- Masuk: {data['masuk']}")
-            st.write(f"- Keluar: {data['keluar']}")
-            st.write(f"- Durasi: {data['durasi']}")
-            if data['biaya']:
-                st.write(f"- Biaya: Rp {data['biaya']:,}")
-            st.write("---")
+st.write("---")
+st.caption("Aplikasi Parkir: fitur lengkap (validation, QR via Google Charts, persistence, notifikasi >24h).")
 
 
 
