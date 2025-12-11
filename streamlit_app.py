@@ -1,383 +1,335 @@
-# app_refactor.py
 import streamlit as st
 import random
 import string
 from datetime import datetime, timedelta
 import pandas as pd
-import io
-import re
-import os
-from urllib.parse import quote_plus
-import requests
+from io import StringIO
 
-# -------------------------------
-# Config
-# -------------------------------
-DATA_FILE = "parkir_data.csv"
-ADMIN_PASS = "admin123"
-PLATE_REGEX = r"^[A-Z]{1,2}\s?\d{1,4}\s?[A-Z]{1,3}$"
-DEFAULT_PAYMENT_METHODS = ["Cash", "QRIS", "Debit", "E-Wallet"]
-KNOWN_BRANDS = {"Toyota", "Honda", "Suzuki", "Daihatsu", "Yamaha", "Kawasaki", "BMW", "Mercedes", "Other"}
-
-# -------------------------------
-# Data model (Node + LinkedList)
-# -------------------------------
-class Node:
-    def __init__(self, nomor_polisi, jenis_kendaraan, waktu_masuk_str,
-                 metode_bayar="Cash", merk="Other", waktu_keluar_str=None, status_bayar="Belum Dibayar"):
-        self.nomor_polisi = nomor_polisi.strip().upper()
+# ===============================
+#   MODEL: VehicleRecord & Manager
+# ===============================
+class VehicleRecord:
+    """Rekam data kendaraan — contoh OOP dasar + property."""
+    def __init__(self, nomor_polisi: str, jenis_kendaraan: str, waktu_masuk: str):
+        self.nomor_polisi = nomor_polisi.strip()
         self.jenis_kendaraan = jenis_kendaraan
-        self.merk = merk if merk in KNOWN_BRANDS else "Other"
-        self.metode_bayar = metode_bayar
-        self.status_bayar = status_bayar
-
-        # parse masuk
+        # parsing waktu masuk (format HH:MM). Jika tanggal tidak disediakan, gunakan hari ini.
         try:
-            if isinstance(waktu_masuk_str, str) and len(waktu_masuk_str) == 5 and ":" in waktu_masuk_str:
-                t = datetime.strptime(waktu_masuk_str, "%H:%M").time()
-                self.waktu_masuk = datetime.combine(datetime.now().date(), t)
-            else:
-                self.waktu_masuk = datetime.fromisoformat(str(waktu_masuk_str))
+            # gunakan tanggal sekarang + jam
+            hh, mm = map(int, waktu_masuk.split(":"))
+            now = datetime.now()
+            self.waktu_masuk = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            # jika waktu masuk dianggap di masa depan hari ini, anggap kemarin
+            if self.waktu_masuk > datetime.now() + timedelta(minutes=5):
+                self.waktu_masuk = self.waktu_masuk - timedelta(days=1)
         except Exception:
+            # default ke sekarang
             self.waktu_masuk = datetime.now()
 
-        # parse keluar
-        if waktu_keluar_str:
-            try:
-                if isinstance(waktu_keluar_str, str) and len(waktu_keluar_str) == 5 and ":" in waktu_keluar_str:
-                    t = datetime.strptime(waktu_keluar_str, "%H:%M").time()
-                    self.waktu_keluar = datetime.combine(self.waktu_masuk.date(), t)
-                else:
-                    self.waktu_keluar = datetime.fromisoformat(str(waktu_keluar_str))
-            except Exception:
-                self.waktu_keluar = None
-        else:
-            self.waktu_keluar = None
+        # simulasi waktu keluar (bisa diatur saat checkout)
+        self.waktu_keluar = None
+        self.durasi_parkir = None
+        self.biaya_parkir = None
+        self.paid = False
+        self.payment_method = None
+        self.payment_time = None
 
-        self.update_durasi_biaya()
-        self.next = None
+    def set_exit_now(self):
+        self.waktu_keluar = datetime.now()
+        self._calc_durasi_biaya()
 
-    def update_durasi_biaya(self):
-        self.durasi_parkir = (self.waktu_keluar - self.waktu_masuk) if self.waktu_keluar else (datetime.now() - self.waktu_masuk)
-        self.biaya_parkir = self.hitung_biaya()
+    def set_exit_at(self, waktu_keluar: datetime):
+        self.waktu_keluar = waktu_keluar
+        self._calc_durasi_biaya()
 
-    def hitung_biaya(self):
-        seconds = max(0, int(self.durasi_parkir.total_seconds()))
-        jam = seconds // 3600
-        if seconds % 3600 != 0:
-            jam += 1
+    def _calc_durasi_biaya(self):
+        if not self.waktu_keluar:
+            return
+        self.durasi_parkir = self.waktu_keluar - self.waktu_masuk
+        jam = int(self.durasi_parkir.total_seconds() // 3600)
         jam = max(1, jam)
         if self.jenis_kendaraan == "Mobil":
-            return 5000 + (jam - 1) * 3000
+            self.biaya_parkir = 5000 + (jam - 1) * 3000
         else:
-            return 3000 + (jam - 1) * 2000
+            self.biaya_parkir = 3000 + (jam - 1) * 2000
 
-    def to_dict(self):
+    def mark_paid(self, method: str):
+        self.paid = True
+        self.payment_method = method
+        self.payment_time = datetime.now()
+
+    def as_dict(self):
         return {
             "Nomor Polisi": self.nomor_polisi,
             "Jenis": self.jenis_kendaraan,
-            "Merk": self.merk,
-            "Metode Bayar": self.metode_bayar,
-            "Status": self.status_bayar,
-            "Masuk": self.waktu_masuk.isoformat(),
-            "Keluar": self.waktu_keluar.isoformat() if self.waktu_keluar else "",
-            "Durasi_s": int(self.durasi_parkir.total_seconds()) if self.durasi_parkir else 0,
-            "Biaya (Rp)": self.biaya_parkir
+            "Masuk": self.waktu_masuk.strftime("%Y-%m-%d %H:%M"),
+            "Keluar": self.waktu_keluar.strftime("%Y-%m-%d %H:%M") if self.waktu_keluar else "",
+            "Durasi": str(self.durasi_parkir) if self.durasi_parkir else "",
+            "Biaya (Rp)": self.biaya_parkir if self.biaya_parkir else 0,
+            "Paid": self.paid,
+            "Payment Method": self.payment_method or ""
         }
 
-class DataParkir:
+class ParkingManager:
+    """Manager memegang data parkir. Menyediakan operasi add/search/delete/list/import/export."""
     def __init__(self):
-        self.head = None
+        # simpan list untuk urutan dan dict untuk lookup cepat
+        self._records = []
+        self._index = {}  # nomor_polisi -> record (last occurrence)
+        self._seen_plate_set = set()  # contoh penggunaan set
 
-    def __iter__(self):
-        cur = self.head
-        while cur:
-            yield cur
-            cur = cur.next
+    def add(self, nomor_polisi, jenis, waktu_masuk):
+        rec = VehicleRecord(nomor_polisi, jenis, waktu_masuk)
+        # append dan index
+        self._records.append(rec)
+        self._index[rec.nomor_polisi] = rec
+        self._seen_plate_set.add(rec.nomor_polisi)
+        return rec
 
-    def add(self, nomor_polisi, jenis, waktu, metode="Cash", merk="Other"):
-        node = Node(nomor_polisi, jenis, waktu, metode, merk)
-        if not self.head:
-            self.head = node
-        else:
-            cur = self.head
-            while cur.next:
-                cur = cur.next
-            cur.next = node
-        return node
-
-    def search(self, nomor_polisi):
-        key = nomor_polisi.strip().upper()
-        cur = self.head
-        while cur:
-            if cur.nomor_polisi == key:
-                return cur
-            cur = cur.next
-        return None
+    def get(self, nomor_polisi):
+        return self._index.get(nomor_polisi)
 
     def delete(self, nomor_polisi):
-        key = nomor_polisi.strip().upper()
-        if not self.head:
+        rec = self._index.get(nomor_polisi)
+        if not rec:
             return False
-        if self.head.nomor_polisi == key:
-            self.head = self.head.next
-            return True
-        cur = self.head
-        while cur.next:
-            if cur.next.nomor_polisi == key:
-                cur.next = cur.next.next
-                return True
-            cur = cur.next
-        return False
+        # hapus dari list
+        try:
+            self._records.remove(rec)
+        except ValueError:
+            pass
+        # hapus dari index (tetap biarkan di seen set)
+        del self._index[nomor_polisi]
+        return True
 
-    def to_df(self):
-        rows = []
-        for n in self:
-            d = n.to_dict()
-            masuk_h = datetime.fromisoformat(d["Masuk"]).strftime("%Y-%m-%d %H:%M")
-            keluar_h = d["Keluar"] and datetime.fromisoformat(d["Keluar"]).strftime("%Y-%m-%d %H:%M") or ""
-            durasi_h = str(timedelta(seconds=d["Durasi_s"]))
-            rows.append({
-                "Nomor Polisi": d["Nomor Polisi"],
-                "Jenis": d["Jenis"],
-                "Merk": d["Merk"],
-                "Metode Bayar": d["Metode Bayar"],
-                "Status": d["Status"],
-                "Masuk": masuk_h,
-                "Keluar": keluar_h,
-                "Durasi": durasi_h,
-                "Biaya (Rp)": d["Biaya (Rp)"]
-            })
-        if rows:
-            return pd.DataFrame(rows)
-        else:
-            cols = ["Nomor Polisi","Jenis","Merk","Metode Bayar","Status","Masuk","Keluar","Durasi","Biaya (Rp)"]
-            return pd.DataFrame(columns=cols)
+    def all(self):
+        return list(self._records)
 
-    def save_to_csv(self, filepath=DATA_FILE):
-        df = pd.DataFrame([n.to_dict() for n in self])
-        df.to_csv(filepath, index=False)
+    def to_dataframe(self):
+        return pd.DataFrame([r.as_dict() for r in self._records])
 
-    def load_from_csv(self, filepath=DATA_FILE):
-        if hasattr(filepath, "read"):
-            df = pd.read_csv(filepath)
-        else:
-            if not os.path.exists(filepath):
-                return
-            df = pd.read_csv(filepath)
-        self.head = None
+    def import_from_df(self, df: pd.DataFrame):
+        # df harus berisi kolom: Nomor, Jenis, Masuk (HH:MM atau YYYY-MM-DD HH:MM)
+        count = 0
         for _, row in df.iterrows():
-            masuk = row.get("Masuk")
-            keluar = row.get("Keluar", "")
-            self.add(
-                row["Nomor Polisi"],
-                row["Jenis"],
-                masuk,
-                row.get("Metode Bayar", "Cash"),
-                row.get("Merk", "Other")
-            )
-            node = self.search(row["Nomor Polisi"])
-            node.status_bayar = row.get("Status", "Belum Dibayar")
-            if keluar and isinstance(keluar, str) and keluar.strip() != "":
-                try:
-                    node.waktu_keluar = datetime.fromisoformat(keluar)
-                except Exception:
-                    node.waktu_keluar = None
-            node.update_durasi_biaya()
+            nom = str(row.get("Nomor", row.get("Nomor Polisi", ""))).strip()
+            jenis = str(row.get("Jenis", "Motor")).strip()
+            masuk = str(row.get("Masuk", row.get("Waktu Masuk", ""))).strip()
+            if not masuk:
+                # jika tidak ada jam, pakai sekarang
+                masuk = datetime.now().strftime("%H:%M")
+            self.add(nom, jenis, masuk)
+            count += 1
+        return count
 
-# -------------------------------
-# Helpers
-# -------------------------------
-def valid_plate(plate):
-    return bool(re.match(PLATE_REGEX, plate.strip().upper()))
+    def export_to_csv(self):
+        df = self.to_dataframe()
+        return df.to_csv(index=False)
 
-def gen_random_plate():
-    return f"{random.choice(['B','D','AB','Z'])} {random.randint(100,9999)} {''.join(random.choices(string.ascii_uppercase, k=2))}"
+    def generate_sample(self, n=20):
+        jenis = ["Mobil", "Motor"]
+        for _ in range(n):
+            nomor = f"B {random.randint(1000,9999)} {''.join(random.choices(string.ascii_uppercase, k=3))}"
+            j = random.choice(jenis)
+            w = f"{random.randint(6,22)}:{random.randint(0,59):02d}"
+            self.add(nomor, j, w)
 
-def generate_qr_image_bytes(text, size=300):
-    """Download QR from Google Chart API and return raw bytes, or None."""
-    base = "https://chart.googleapis.com/chart"
-    params = f"?chs={size}x{size}&cht=qr&chl={quote_plus(text)}&choe=UTF-8"
-    url = base + params
-    try:
-        r = requests.get(url, timeout=8)
-        if r.status_code == 200:
-            return r.content
-    except Exception:
-        return None
-    return None
+    def overdue_records(self, hours=24):
+        res = []
+        now = datetime.now()
+        for r in self._records:
+            # hitung durasi sampai sekarang jika belum keluar
+            end = r.waktu_keluar or now
+            dur = end - r.waktu_masuk
+            if dur.total_seconds() > hours * 3600:
+                # pastikan durasi dan biaya dihitung untuk display
+                if not r.waktu_keluar:
+                    r.set_exit_at(now)
+                res.append(r)
+        return res
 
-# -------------------------------
-# App UI
-# -------------------------------
-st.set_page_config(page_title="Sistem Parkir (Refactor)", layout="wide")
+# ===============================
+#       STREAMLIT UI
+# ===============================
+st.set_page_config(page_title="Sistem Manajemen Parkir (Demo)", layout="wide")
+st.title("🏢 Sistem Manajemen Parkir — Demo lengkap untuk materi pemrograman")
 
-if "parkir" not in st.session_state:
-    st.session_state.parkir = DataParkir()
-    st.session_state.parkir.load_from_csv(DATA_FILE)
+# session init
+if "manager" not in st.session_state:
+    st.session_state.manager = ParkingManager()
+manager: ParkingManager = st.session_state.manager
 
-parkir = st.session_state.parkir
+# Sidebar menu
+menu = st.sidebar.selectbox("Menu", [
+    "Dashboard",
+    "Input Kendaraan",
+    "Cari / Hapus",
+    "Pembayaran (Checkout)",
+    "Import / Export",
+    "Sample Data & Utilitas"
+])
 
-menu = st.sidebar.radio("Menu", ["Dashboard", "Input", "Checkout", "Data", "Admin"])
-
-st.title("🏢 Sistem Parkir — Versi Refactor")
-
-# -------- Dashboard ----------
+# ---------- Dashboard ----------
 if menu == "Dashboard":
-    st.header("Dashboard")
-    data_nodes = parkir.to_df()
-    data = parkir.all_data()
+    st.header("📊 Dashboard Parkir")
+    data = manager.all()
+    df = manager.to_dataframe()
+    st.dataframe(df, use_container_width=True)
 
-    total_income = data_nodes["Biaya (Rp)"].sum() if not data_nodes.empty else 0
-    total_vehicles = len(data)
-    in_area = len([n for n in data if not n.waktu_keluar])
-    paid = len([n for n in data if n.status_bayar == "Sudah Dibayar"])
+    total_pendapatan = sum([r.biaya_parkir or 0 for r in data if r.paid])
+    jml_mobil = len([r for r in data if r.jenis_kendaraan == "Mobil"])
+    jml_motor = len([r for r in data if r.jenis_kendaraan == "Motor"])
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Pendapatan", f"Rp {total_income:,}")
-    c2.metric("Total Kendaraan", total_vehicles)
-    c3.metric("Masih Parkir", in_area)
-    c4.metric("Telah Bayar", paid)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Pendapatan (paid)", f"Rp {total_pendapatan:,}")
+    c2.metric("Jumlah Mobil (parkir tercatat)", jml_mobil)
+    c3.metric("Jumlah Motor (parkir tercatat)", jml_motor)
 
-    st.subheader("Pendapatan Harian (sample)")
-    if not data_nodes.empty:
-        # convert Masuk to date and sum Biaya per Masuk-date (note: biaya may be 0 if still parked)
-        df_rev = data_nodes.copy()
-        df_rev["Masuk_date"] = pd.to_datetime(df_rev["Masuk"]).dt.date
-        rev = df_rev.groupby("Masuk_date")["Biaya (Rp)"].sum().reset_index()
-        rev = rev.rename(columns={"Masuk_date":"Tanggal"})
-        rev["Tanggal"] = pd.to_datetime(rev["Tanggal"])
-        st.line_chart(rev.set_index("Tanggal")["Biaya (Rp)"])
+    st.subheader("Notifikasi - Kendaraan parkir > 24 jam")
+    overdue = manager.overdue_records(hours=24)
+    if overdue:
+        st.warning(f"Ada {len(overdue)} kendaraan yang parkir lebih dari 24 jam!")
+        df_over = pd.DataFrame([r.as_dict() for r in overdue])
+        st.dataframe(df_over, use_container_width=True)
+        # action: tampilkan tombol notifikasi (visual)
+        if st.button("Tandai semua overdue sebagai 'Diberitahu' (simulasi)"):
+            # kita hanya simulasi: tambahkan tag ke payment method
+            for r in overdue:
+                r.payment_method = (r.payment_method or "") + " | overdue-notified"
+            st.success("Semua kendaraan overdue ditandai.")
     else:
-        st.info("Belum ada data untuk grafik.")
+        st.info("Tidak ada kendaraan yang parkir lebih dari 24 jam.")
 
-    st.subheader("Notifikasi: Kendaraan >24 jam")
-    old = []
-    for n in parkir.all_data():
-        dur = (datetime.now() - n.waktu_masuk) if not n.waktu_keluar else (n.waktu_keluar - n.waktu_masuk)
-        if not n.waktu_keluar and dur > timedelta(hours=24):
-            old.append((n.nomor_polisi, n.merk, dur))
-    if old:
-        for p, m, d in old:
-            st.warning(f"{p} ({m}) — terparkir {str(d)}")
-    else:
-        st.success("Tidak ada kendaraan >24 jam.")
+    st.markdown("---")
+    st.subheader("Ringkasan Data Mentah")
+    st.write(f"Jumlah plat unik tercatat: {len(manager._seen_plate_set)} (contoh penggunaan set).")
 
-# -------- Input ----------
-elif menu == "Input":
-    st.header("Parkir Masuk")
-    col1, col2, col3, col4 = st.columns([2,2,2,2])
+# ---------- Input Kendaraan ----------
+elif menu == "Input Kendaraan":
+    st.header("➕ Input Kendaraan Masuk")
+    col1, col2, col3 = st.columns(3)
     with col1:
-        nopol = st.text_input("Nomor Polisi", value=gen_random_plate()).upper()
+        inp_nopol = st.text_input("Nomor Polisi", value="")
     with col2:
-        jenis = st.selectbox("Jenis", ["Mobil", "Motor"])
+        inp_jenis = st.selectbox("Jenis Kendaraan", ["Mobil", "Motor"])
     with col3:
-        merk = st.selectbox("Merk", sorted(list(KNOWN_BRANDS)))
-    with col4:
-        waktu = st.time_input("Waktu Masuk", value=datetime.now().time())
-    metode = st.selectbox("Metode Bayar", DEFAULT_PAYMENT_METHODS)
+        inp_waktu = st.text_input("Waktu Masuk (HH:MM)", value=datetime.now().strftime("%H:%M"))
 
-    if st.button("Simpan Masuk"):
-        if not nopol.strip():
-            st.error("Nomor polisi wajib diisi")
-        elif not valid_plate(nopol):
-            st.error("Format nomor tidak valid (contoh: B 1234 ABC)")
+    if st.button("Tambah Data"):
+        if not inp_nopol.strip():
+            st.error("Nomor polisi wajib diisi.")
         else:
-            parkir.add(nopol, jenis, waktu.strftime("%H:%M"), metode, merk)
-            parkir.save_to_csv(DATA_FILE)
-            st.success(f"{nopol} tercatat masuk.")
-            # generate QR bytes and show + download
-            text = f"PLAT:{nopol}|MASUK:{datetime.now().isoformat()}"
-            qr_bytes = generate_qr_image_bytes(text, size=300)
-            if qr_bytes:
-                st.image(qr_bytes, width=250, caption="QR Tiket")
-                st.download_button("Download QR", qr_bytes, file_name=f"ticket_{nopol}.png", mime="image/png")
-            else:
-                st.info("QR tidak dapat dibuat (cek koneksi).")
+            r = manager.add(inp_nopol, inp_jenis, inp_waktu)
+            st.success(f"Ditambahkan: {r.nomor_polisi} — {r.jenis_kendaraan} masuk pukul {r.waktu_masuk.strftime('%Y-%m-%d %H:%M')}")
 
-# -------- Checkout ----------
-elif menu == "Checkout":
-    st.header("Parkir Keluar / Pembayaran")
-    key = st.text_input("Nomor Polisi untuk Checkout").upper()
-    col1, col2 = st.columns(2)
-    with col1:
+# ---------- Search / Delete ----------
+elif menu == "Cari / Hapus":
+    st.header("🔍 Cari / Hapus Data")
+    key = st.text_input("Masukkan Nomor Polisi untuk Cari/Hapus")
+    c1, c2 = st.columns(2)
+    with c1:
         if st.button("Cari"):
-            node = parkir.search(key)
-            if node:
-                node.update_durasi_biaya()
-                st.write(pd.DataFrame([node.to_dict()]))
+            rec = manager.get(key)
+            if rec:
+                rec.set_exit_now() if not rec.waktu_keluar else None
+                st.info(
+                    f"Nomor: {rec.nomor_polisi}\n"
+                    f"Jenis: {rec.jenis_kendaraan}\n"
+                    f"Masuk: {rec.waktu_masuk.strftime('%Y-%m-%d %H:%M')}\n"
+                    f"Keluar: {rec.waktu_keluar.strftime('%Y-%m-%d %H:%M') if rec.waktu_keluar else '—'}\n"
+                    f"Durasi: {rec.durasi_parkir}\n"
+                    f"Biaya: Rp {rec.biaya_parkir:,}\n"
+                    f"Paid: {rec.paid}"
+                )
             else:
                 st.warning("Data tidak ditemukan.")
-    with col2:
-        if st.button("Tandai Lunas & Set Keluar"):
-            node = parkir.search(key)
-            if node:
-                node.status_bayar = "Sudah Dibayar"
-                if not node.waktu_keluar:
-                    node.waktu_keluar = datetime.now()
-                node.update_durasi_biaya()
-                parkir.save_to_csv(DATA_FILE)
-                st.success(f"{key} telah dilunasi. Biaya: Rp {node.biaya_parkir:,}")
+    with c2:
+        if st.button("Hapus"):
+            if manager.delete(key):
+                st.success("Data dihapus.")
             else:
-                st.error("Data tidak ditemukan.")
+                st.error("Nomor polisi tidak ditemukan.")
 
-    st.write("---")
-    st.subheader("Cetak / Download QR dari Nomor Polisi")
-    qr_key = st.text_input("Nomor Polisi untuk QR (Cetak)").upper()
-    if st.button("Generate QR untuk Nomor"):
-        node = parkir.search(qr_key)
-        if node:
-            text = f"PLAT:{node.nomor_polisi}|MASUK:{node.waktu_masuk.isoformat()}|BIAYA:{node.biaya_parkir}"
-            qr_bytes = generate_qr_image_bytes(text, size=300)
-            if qr_bytes:
-                st.image(qr_bytes, width=250)
-                st.download_button("Download QR", qr_bytes, file_name=f"ticket_{node.nomor_polisi}.png", mime="image/png")
-            else:
-                st.error("Gagal mengambil QR (cek koneksi).")
+# ---------- Pembayaran ----------
+elif menu == "Pembayaran (Checkout)":
+    st.header("💳 Pembayaran / Checkout")
+    key = st.text_input("Masukkan Nomor Polisi untuk Checkout")
+    if st.button("Hitung Biaya"):
+        rec = manager.get(key)
+        if not rec:
+            st.error("Data tidak ditemukan.")
         else:
-            st.error("Nomor polisi tidak ditemukan.")
+            # set exit sekarang dan hitung biaya
+            rec.set_exit_now()
+            st.write(f"Biaya parkir: Rp {rec.biaya_parkir:,} (durasi {rec.durasi_parkir})")
+            method = st.selectbox("Metode Pembayaran", ["Cash", "E-Money (simulasi)", "QR (simulasi)"])
+            if method == "Cash":
+                uang = st.number_input("Bayar (uang tunai)", min_value=0, step=1000)
+                if st.button("Proses Bayar (Cash)"):
+                    if uang < rec.biaya_parkir:
+                        st.error("Uang tidak cukup.")
+                    else:
+                        change = uang - rec.biaya_parkir
+                        rec.mark_paid("Cash")
+                        st.success(f"Pembayaran diterima. Kembalian: Rp {change:,}")
+                        st.write("=== STRUK ===")
+                        st.write(rec.as_dict())
+            else:
+                if st.button("Proses Bayar (Non-Cash)"):
+                    # simulasi sukses
+                    rec.mark_paid(method)
+                    st.success(f"Pembayaran via {method} berhasil (simulasi).")
+                    st.write(rec.as_dict())
 
-# -------- Data ----------
-elif menu == "Data":
-    st.header("Data Parkir")
-    df = parkir.to_df()
-    st.dataframe(df, use_container_width=True)
-    st.write("---")
-    if st.button("Generate Simulasi 20"):
-        for _ in range(20):
-            nomor = gen_random_plate()
-            j = random.choice(["Mobil", "Motor"])
-            w = f"{random.randint(6,22)}:{random.randint(0,59):02d}"
-            m = random.choice(DEFAULT_PAYMENT_METHODS)
-            merk = random.choice(list(KNOWN_BRANDS))
-            parkir.add(nomor, j, w, m, merk)
-        parkir.save_to_csv(DATA_FILE)
-        st.success("Simulasi ditambahkan.")
+# ---------- Import / Export ----------
+elif menu == "Import / Export":
+    st.header("📂 Import / Export Data (CSV)")
 
-# -------- Admin ----------
-elif menu == "Admin":
-    st.header("Admin / Export")
-    pw = st.text_input("Password Admin", type="password")
-    if pw == ADMIN_PASS:
-        st.success("Autentikasi berhasil")
-        if st.button("Save CSV Sekarang"):
-            parkir.save_to_csv(DATA_FILE)
-            st.success("Tersimpan.")
-        uploaded = st.file_uploader("Import CSV (format export)", type=["csv"])
-        if uploaded:
-            try:
-                parkir.load_from_csv(uploaded)
-                parkir.save_to_csv(DATA_FILE)
-                st.success("Import berhasil")
-            except Exception as e:
-                st.error(f"Gagal import: {e}")
-        if st.button("Export CSV untuk Download"):
-            df = parkir.to_df()
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button("Download CSV", data=csv, file_name="parkir_export.csv", mime="text/csv")
-    else:
-        if pw:
-            st.error("Password salah")
+    st.subheader("Import CSV")
+    uploaded = st.file_uploader("Upload CSV (kolom: Nomor, Jenis, Masuk[HH:MM atau datetime])", type=["csv"])
+    if uploaded is not None:
+        try:
+            df = pd.read_csv(uploaded)
+            cnt = manager.import_from_df(df)
+            st.success(f"Berhasil import {cnt} baris.")
+        except Exception as e:
+            st.error(f"Gagal import: {e}")
 
-st.write("---")
-st.caption("Aplikasi Parkir — Refactor. QR di-generate via Google Charts API & didownload agar tampil di Streamlit.")
+    st.subheader("Export CSV")
+    csv = manager.export_to_csv()
+    st.download_button("Download data parkir (CSV)", data=csv, file_name="data_parkir.csv", mime="text/csv")
+
+    st.subheader("Export Log Pembayaran (CSV)")
+    # buat DataFrame pembayaran
+    paid_df = pd.DataFrame([r.as_dict() for r in manager.all() if r.paid])
+    csv_paid = paid_df.to_csv(index=False)
+    st.download_button("Download pembayaran (CSV)", data=csv_paid, file_name="log_pembayaran.csv", mime="text/csv")
+
+# ---------- Sample Data & Utilitas ----------
+elif menu == "Sample Data & Utilitas":
+    st.header("⚙️ Sample & Utilitas")
+    if st.button("Generate Sample Data (20)"):
+        manager.generate_sample(20)
+        st.success("Sample data ditambahkan.")
+    if st.button("Bersihkan semua data (RESET)"):
+        # reset session manager
+        st.session_state.manager = ParkingManager()
+        st.success("Data direset.")
+    st.markdown("---")
+    st.write("Contoh struktur data internal (dict index & set):")
+    st.write("Index keys (beberapa):", list(manager._index.keys())[:10])
+    st.write("Seen plates count (set):", len(manager._seen_plate_set))
+
+# ===============================
+#      Footer / Penjelasan
+# ===============================
+st.sidebar.markdown("---")
+st.sidebar.markdown("Aplikasi demo ini meliputi materi:\n\n"
+                    "- Variables, Input/Output (Streamlit)\n"
+                    "- Branching (if/else)\n"
+                    "- Looping (for/while dalam list handling)\n"
+                    "- Strings (format, parsing)\n"
+                    "- List, Dict, Set (data structures)\n"
+                    "- File handling (import/export CSV)\n"
+                    "- OOP dasar + sedikit lanjutan (class, enkapsulasi, methods)\n\n"
+                    "Kamu tidak perlu meng-upload file untuk menjalankan — fitur upload disediakan jika kamu ingin memulai dari file CSV.")
