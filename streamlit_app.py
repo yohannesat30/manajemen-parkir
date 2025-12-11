@@ -120,7 +120,7 @@ st.title("🏢 Sistem Manajemen Data Parkir")
 if "parkir" not in st.session_state:
     st.session_state.parkir = DataParkir()
 parkir = st.session_state.parkir
-parkir.load_from_file()  # load data from file
+parkir.load_from_file()  # load data dari file CSV
 
 # ===============================
 #    Generate Sample Data
@@ -136,6 +136,7 @@ def generate_data():
 if st.button("Generate Data Parkir (Simulasi Bisnis)"):
     generate_data()
     st.success("Data simulasi berhasil ditambahkan!")
+    parkir.save_to_file()
 
 # ===============================
 #         INPUT DATA
