@@ -11,7 +11,6 @@ class VehicleRecord:
         self.jenis_kendaraan = jenis_kendaraan
         try:
             # Tetap parse dari string. Format sudah dijamin dari frontend.
-            # *LOGIKA KOREKSI WAKTU DIHAPUS agar waktu input manual tidak berubah*
             self.waktu_masuk = datetime.strptime(waktu_masuk, "%Y-%m-%d %H:%M")
         except:
             # Fallback jika parsing gagal
@@ -38,13 +37,11 @@ class VehicleRecord:
         
         # Hitung Jam Pembulatan ke atas (minimal 1 jam)
         total_seconds = dur.total_seconds()
-        # Pembulatan ke jam terdekat ke atas. Contoh: 1 jam 1 menit = 2 jam
-        # Menggunakan ceil jika ada sisa, tapi cara sederhana:
-        # Menghitung jam = (total_seconds + 3599) // 3600 -> ini pembulatan ke atas yang aman
+        # Menggunakan pembulatan ke atas yang aman
         jam = int((total_seconds + 3599) // 3600) 
         jam = max(1, jam) # Minimal 1 jam
         
-        # Kalkulasi Biaya Parkir (menggunakan struktur biaya yang sama)
+        # Kalkulasi Biaya Parkir 
         if self.jenis_kendaraan == "Mobil":
             # Jam pertama Rp 5000, jam berikutnya Rp 3000
             self.biaya_parkir = 5000 + (jam - 1) * 3000
@@ -75,6 +72,7 @@ class ParkingManager:
         self._index = {}
 
     def add(self, nomor_polisi, jenis, waktu):
+        # Cek apakah kendaraan masih di dalam (belum checkout)
         if nomor_polisi in self._index and not self._index[nomor_polisi].waktu_keluar:
              raise ValueError(f"Kendaraan dengan nopol {nomor_polisi} masih tercatat di dalam.")
              
@@ -90,8 +88,10 @@ class ParkingManager:
         rec = self._index.get(nomor_polisi)
         if not rec:
             return False
-        self._records.remove(rec)
-        del self._index[nomor_polisi]
+        # Menghapus dari list _records
+        self._records.remove(rec) 
+        # Menghapus dari dictionary _index
+        del self._index[nomor_polisi] 
         return True
 
     def all(self):
@@ -110,8 +110,6 @@ class ParkingManager:
                 
             dur = now - r.waktu_masuk
             if dur.total_seconds() > hours * 3600:
-                # Untuk menampilkan di daftar overdue, kita hitung dulu biaya/durasi saat ini
-                # tanpa mengubah status keluar. set_exit_now() akan mengubah status.
                 # Kita buat VehicleRecord sementara untuk hitungan biaya saat ini.
                 temp_rec = VehicleRecord(r.nomor_polisi, r.jenis_kendaraan, r.waktu_masuk.strftime("%Y-%m-%d %H:%M"))
                 temp_rec.set_exit_now() 
@@ -120,7 +118,7 @@ class ParkingManager:
 
     def statistics_today(self):
         today = datetime.now().date()
-        # Masuk hari ini: yang waktu masuknya hari ini DAN belum keluar / sudah keluar
+        # Masuk hari ini: yang waktu masuknya hari ini
         masuk_hari_ini = [r for r in self._records if r.waktu_masuk.date() == today]
         # Bayar hari ini: yang sudah dibayar DAN waktu bayarnya hari ini
         bayar_hari_ini = [r for r in self._records if r.payment_time and r.payment_time.date() == today]
@@ -129,8 +127,10 @@ class ParkingManager:
         
         return {
             "pendapatan": total_pendapatan,
-            "mobil": len([r for r in masuk_hari ini if r.jenis_kendaraan == "Mobil"]),
-            "motor": len([r for r in masuk_hari ini if r.jenis_kendaraan == "Motor"]),
+            # Perbaikan: menggunakan variabel masuk_hari_ini (tanpa spasi)
+            "mobil": len([r for r in masuk_hari_ini if r.jenis_kendaraan == "Mobil"]), 
+            # Perbaikan: menggunakan variabel masuk_hari_ini (tanpa spasi)
+            "motor": len([r for r in masuk_hari_ini if r.jenis_kendaraan == "Motor"]), 
             "transaksi": len(bayar_hari_ini)
         }
 
@@ -153,7 +153,7 @@ st.dataframe(df, use_container_width=True)
 
 stats = manager.statistics_today()
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Pendapatan Hari Ini", f"Rp {stats['pendapatan']:,}")
+c1.metric("Pendapatan Hari Ini", f"Rp {stats['pendapatan']:,.0f}")
 c2.metric("Mobil Masuk Hari Ini", stats["mobil"])
 c3.metric("Motor Masuk Hari Ini", stats["motor"])
 c4.metric("Transaksi Selesai Hari Ini", stats["transaksi"])
@@ -170,7 +170,7 @@ else:
     st.success("Tidak ada kendaraan yang parkir lebih dari 24 jam.")
 
 # -------------------------------
-# Input kendaraan masuk (Perbaikan di sini)
+# Input kendaraan masuk 
 # -------------------------------
 st.header("➕ Input Kendaraan Masuk")
 with st.form("input_form"):
@@ -181,8 +181,6 @@ with st.form("input_form"):
     with col_tanggal:
         tanggal = st.date_input("Tanggal Masuk", date.today(), key="input_tanggal")
     with col_waktu:
-        # Menggunakan value=None untuk memastikan user *memilih* waktu atau default ke 00:00:00
-        # Jika menggunakan datetime.now().time(), akan selalu berubah saat refresh
         waktu_manual = st.time_input("Jam & Menit Masuk", value=datetime.now().time(), key="input_waktu")
 
     # Menggabungkan tanggal dan waktu manual
@@ -197,7 +195,7 @@ with st.form("input_form"):
         else:
             try:
                 # Kirim string waktu yang sudah pasti sesuai input user
-                manager.add(nopol, jenis, waktu_masuk_final.strftime("%Y-%m-%d %H:%M"))
+                manager.add(nopol, jenis, waktu_masuk_final.strftime("%Y-%m-%d %H:%d"))
                 st.success(f"Data kendaraan **{nopol}** berhasil ditambahkan pada {waktu_masuk_final.strftime('%Y-%m-%d %H:%M')}.")
             except ValueError as ve:
                  st.error(str(ve))
