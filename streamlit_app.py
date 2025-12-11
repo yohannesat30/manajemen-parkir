@@ -144,14 +144,15 @@ st.header("➕ Input Kendaraan Masuk")
 nopol = st.text_input("Nomor Polisi")
 jenis = st.selectbox("Jenis", ["Mobil", "Motor"])
 
-# Pilih tanggal lewat calendar
+# Tanggal dipilih lewat calendar
 tanggal = st.date_input("Tanggal Masuk", date.today())
 
-# Input jam manual
-jam = st.time_input("Jam Masuk", datetime.now().time().replace(second=0, microsecond=0))
+# Jam masuk manual (jam & menit)
+jam_manual = st.number_input("Jam Masuk (0-23)", min_value=0, max_value=23, value=datetime.now().hour)
+menit_manual = st.number_input("Menit Masuk (0-59)", min_value=0, max_value=59, value=datetime.now().minute)
 
 # Gabungkan tanggal & jam
-waktu_manual = datetime.combine(tanggal, jam)
+waktu_manual = datetime.combine(tanggal, datetime.min.time()).replace(hour=jam_manual, minute=menit_manual)
 
 if st.button("Tambah Kendaraan"):
     if not nopol.strip():
