@@ -1,5 +1,5 @@
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 
 # ===============================
@@ -10,9 +10,9 @@ class VehicleRecord:
         self.nomor_polisi = nomor_polisi.strip()
         self.jenis_kendaraan = jenis_kendaraan
         try:
-            hh, mm = map(int, waktu_masuk.split(":"))
+            dt = datetime.strptime(waktu_masuk, "%Y-%m-%d %H:%M")
             now = datetime.now()
-            self.waktu_masuk = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            self.waktu_masuk = dt
             if self.waktu_masuk > now + timedelta(minutes=5):
                 self.waktu_masuk -= timedelta(days=1)
         except:
@@ -119,107 +119,94 @@ if "manager" not in st.session_state:
     st.session_state.manager = ParkingManager()
 manager = st.session_state.manager
 
-tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "Input Kendaraan", "Cari / Hapus", "Pembayaran"])
+st.header("📊 Dashboard Parkir")
+df = manager.to_dataframe()
+st.dataframe(df, use_container_width=True)
+stats = manager.statistics_today()
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Pendapatan Hari Ini", f"Rp {stats['pendapatan']:,}")
+c2.metric("Mobil Masuk", stats["mobil"])
+c3.metric("Motor Masuk", stats["motor"])
+c4.metric("Transaksi Selesai", stats["transaksi"])
+st.subheader("⏰ Kendaraan Parkir > 24 Jam")
+over = manager.overdue_records()
+if over:
+    st.warning(f"{len(over)} kendaraan parkir lebih dari 24 jam.")
+    st.dataframe(pd.DataFrame([r.as_dict() for r in over]), use_container_width=True)
+else:
+    st.success("Tidak ada kendaraan yang parkir lebih dari 24 jam.")
 
-# ===============================
-# Dashboard
-# ===============================
-with tab1:
-    st.header("📊 Dashboard Parkir")
-    df = manager.to_dataframe()
-    st.dataframe(df, use_container_width=True)
-    stats = manager.statistics_today()
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Pendapatan Hari Ini", f"Rp {stats['pendapatan']:,}")
-    c2.metric("Mobil Masuk", stats["mobil"])
-    c3.metric("Motor Masuk", stats["motor"])
-    c4.metric("Transaksi Selesai", stats["transaksi"])
-    st.subheader("⏰ Kendaraan Parkir > 24 Jam")
-    over = manager.overdue_records()
-    if over:
-        st.warning(f"{len(over)} kendaraan parkir lebih dari 24 jam.")
-        st.dataframe(pd.DataFrame([r.as_dict() for r in over]), use_container_width=True)
+st.header("➕ Input Kendaraan Masuk")
+nopol = st.text_input("Nomor Polisi")
+jenis = st.selectbox("Jenis", ["Mobil", "Motor"])
+tanggal = st.date_input("Tanggal Masuk", datetime.now().date())
+waktu = st.time_input("Waktu Masuk", datetime.now().time().replace(second=0, microsecond=0))
+dt_masuk = datetime.combine(tanggal, waktu)
+if st.button("Tambah Kendaraan"):
+    if nopol.strip():
+        manager.add(nopol, jenis, dt_masuk.strftime("%Y-%m-%d %H:%M"))
+        st.success("Data berhasil ditambahkan.")
     else:
-        st.success("Tidak ada kendaraan yang parkir lebih dari 24 jam.")
+        st.error("Nomor polisi wajib diisi.")
 
-# ===============================
-# Input Kendaraan
-# ===============================
-with tab2:
-    st.header("➕ Input Kendaraan Masuk")
-    nopol = st.text_input("Nomor Polisi")
-    jenis = st.selectbox("Jenis", ["Mobil", "Motor"])
-    waktu = st.text_input("Waktu Masuk (HH:MM)", datetime.now().strftime("%H:%M"))
-    if st.button("Tambah Kendaraan"):
-        if nopol.strip():
-            manager.add(nopol, jenis, waktu)
-            st.success("Data berhasil ditambahkan.")
-        else:
-            st.error("Nomor polisi wajib diisi.")
-
-# ===============================
-# Cari / Hapus
-# ===============================
-with tab3:
-    st.header("🔍 Cari / Hapus Data Kendaraan")
-    key = st.text_input("Nomor Polisi untuk Cari/Hapus", key="key_search")
+st.header("🔍 Cari / Hapus Data Kendaraan")
+key_search = st.text_input("Nomor Polisi untuk Cari/Hapus")
+c1, c2 = st.columns(2)
+with c1:
     if st.button("Cari Kendaraan"):
-        r = manager.get(key)
+        r = manager.get(key_search)
         if r:
             if not r.waktu_keluar:
                 r.set_exit_now()
             st.write(r.as_dict())
         else:
             st.error("Data tidak ditemukan.")
+with c2:
     if st.button("Hapus Kendaraan"):
-        if manager.delete(key):
+        if manager.delete(key_search):
             st.success("Data berhasil dihapus.")
         else:
             st.error("Nomor polisi tidak ditemukan.")
 
-# ===============================
-# Pembayaran
-# ===============================
-with tab4:
-    st.header("💳 Pembayaran / Checkout")
-    key = st.text_input("Nomor Polisi untuk Checkout", key="key_checkout")
+st.header("💳 Pembayaran / Checkout")
+key_checkout = st.text_input("Nomor Polisi untuk Checkout", key="checkout_key")
 
-    if "checkout_plate" not in st.session_state:
-        st.session_state.checkout_plate = None
-    if "checkout_method" not in st.session_state:
-        st.session_state.checkout_method = None
+if "checkout_plate" not in st.session_state:
+    st.session_state.checkout_plate = None
+if "checkout_method" not in st.session_state:
+    st.session_state.checkout_method = None
 
-    if key:
-        rec = manager.get(key)
-        if not rec:
-            st.error("Data tidak ditemukan.")
-        else:
-            if st.button("Hitung Biaya"):
-                rec.set_exit_now()
-                st.session_state.checkout_plate = key
-                st.info(f"Durasi Parkir: {rec.durasi_parkir}")
-                st.info(f"Biaya Parkir: Rp {rec.biaya_parkir:,}")
+if key_checkout:
+    rec = manager.get(key_checkout)
+    if not rec:
+        st.error("Data tidak ditemukan.")
+    else:
+        if st.button("Hitung Biaya"):
+            rec.set_exit_now()
+            st.session_state.checkout_plate = key_checkout
+            st.info(f"Durasi Parkir: {rec.durasi_parkir}")
+            st.info(f"Biaya Parkir: Rp {rec.biaya_parkir:,}")
 
-            if st.session_state.checkout_plate == key:
-                metode = st.selectbox("Metode Pembayaran", ["Cash", "Debit", "Credit Card", "QRIS", "E-Money", "E-Wallet"])
-                st.session_state.checkout_method = metode
+        if st.session_state.checkout_plate == key_checkout:
+            metode = st.selectbox("Metode Pembayaran", ["Cash", "Debit", "Credit Card", "QRIS", "E-Money", "E-Wallet"])
+            st.session_state.checkout_method = metode
 
-                if metode == "Cash":
-                    bayar = st.number_input("Bayar (Tunai)", min_value=0, step=1000)
-                    if st.button("Bayar (Cash)"):
-                        if bayar < rec.biaya_parkir:
-                            st.error("Uang tidak cukup.")
-                        else:
-                            rec.mark_paid("Cash")
-                            kembalian = bayar - rec.biaya_parkir
-                            st.success(f"Pembayaran berhasil. Kembalian: Rp {kembalian:,}")
-                            st.write(rec.as_dict())
-                            st.session_state.checkout_plate = None
-                            st.session_state.checkout_method = None
-                else:
-                    if st.button("Bayar (Non-Cash)"):
-                        rec.mark_paid(metode)
-                        st.success(f"Pembayaran berhasil via {metode}.")
+            if metode == "Cash":
+                bayar = st.number_input("Bayar (Tunai)", min_value=0, step=1000)
+                if st.button("Bayar (Cash)"):
+                    if bayar < rec.biaya_parkir:
+                        st.error("Uang tidak cukup.")
+                    else:
+                        rec.mark_paid("Cash")
+                        kembalian = bayar - rec.biaya_parkir
+                        st.success(f"Pembayaran berhasil. Kembalian: Rp {kembalian:,}")
                         st.write(rec.as_dict())
                         st.session_state.checkout_plate = None
                         st.session_state.checkout_method = None
+            else:
+                if st.button("Bayar (Non-Cash)"):
+                    rec.mark_paid(metode)
+                    st.success(f"Pembayaran berhasil via {metode}.")
+                    st.write(rec.as_dict())
+                    st.session_state.checkout_plate = None
+                    st.session_state.checkout_method = None
