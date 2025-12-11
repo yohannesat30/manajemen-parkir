@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 import pandas as pd
 import io
 import re
-import segno
 import os
+from urllib.parse import quote_plus
 
 # -------------------------------
 # Configuration / Constants
@@ -29,26 +29,24 @@ class Node:
         self.metode_bayar = metode_bayar
         self.status_bayar = status_bayar
 
-        # Parse waktu masuk (we store full ISO datetimes internally)
-        # Accept either HH:MM (today) or ISO string
+        # Parse waktu masuk (accept HH:MM or ISO)
         try:
-            if len(waktu_masuk_str) == 5 and ":" in waktu_masuk_str:
+            if isinstance(waktu_masuk_str, str) and len(waktu_masuk_str) == 5 and ":" in waktu_masuk_str:
                 t = datetime.strptime(waktu_masuk_str, "%H:%M").time()
                 self.waktu_masuk = datetime.combine(datetime.now().date(), t)
             else:
-                self.waktu_masuk = datetime.fromisoformat(waktu_masuk_str)
+                self.waktu_masuk = datetime.fromisoformat(str(waktu_masuk_str))
         except Exception:
-            # fallback to now
             self.waktu_masuk = datetime.now()
 
         # waktu keluar optional
         if waktu_keluar_str:
             try:
-                if len(waktu_keluar_str) == 5 and ":" in waktu_keluar_str:
+                if isinstance(waktu_keluar_str, str) and len(waktu_keluar_str) == 5 and ":" in waktu_keluar_str:
                     t = datetime.strptime(waktu_keluar_str, "%H:%M").time()
                     self.waktu_keluar = datetime.combine(self.waktu_masuk.date(), t)
                 else:
-                    self.waktu_keluar = datetime.fromisoformat(waktu_keluar_str)
+                    self.waktu_keluar = datetime.fromisoformat(str(waktu_keluar_str))
             except Exception:
                 self.waktu_keluar = None
         else:
@@ -156,7 +154,6 @@ class DataParkir:
         if rows:
             return pd.DataFrame(rows)
         else:
-            # empty df with columns
             cols = ["Nomor Polisi","Jenis","Merk","Metode Bayar","Status","Masuk","Keluar","Durasi","Biaya (Rp)"]
             return pd.DataFrame(columns=cols)
 
@@ -165,8 +162,7 @@ class DataParkir:
         df.to_csv(filepath, index=False)
 
     def load_from_csv(self, filepath=DATA_FILE):
-        if isinstance(filepath, io.IOBase):
-            # file-like (uploaded)
+        if isinstance(filepath, io.IOBase) or hasattr(filepath, "read"):
             df = pd.read_csv(filepath)
         else:
             if not os.path.exists(filepath):
@@ -191,7 +187,6 @@ class DataParkir:
                     node.waktu_keluar = datetime.fromisoformat(keluar)
                 except Exception:
                     node.waktu_keluar = None
-            # recompute durations and biaya
             node.durasi_parkir = (node.waktu_keluar - node.waktu_masuk) if node.waktu_keluar else (datetime.now() - node.waktu_masuk)
             node.biaya_parkir = node.hitung_biaya()
 
@@ -204,25 +199,23 @@ def valid_plate(plate):
 def gen_random_plate():
     return f"{random.choice(['B','D','AB','Z'])} {random.randint(100,9999)} {''.join(random.choices(string.ascii_uppercase, k=2))}"
 
-def generate_qr_bytes(text):
+def generate_qr_url(text, size=200):
     """
-    Return PNG bytes for given text using segno (no external pillow needed).
+    Use Google Chart API to generate QR image URL.
+    This avoids installing QR libs.
     """
-    qr = segno.make(text)
-    buf = io.BytesIO()
-    qr.save(buf, kind='png', scale=6)  # scale controls size
-    buf.seek(0)
-    return buf.read()
+    base = "https://chart.googleapis.com/chart"
+    params = f"?chs={size}x{size}&cht=qr&chl={quote_plus(text)}&choe=UTF-8"
+    return base + params
 
 # -------------------------------
 # Streamlit App UI
 # -------------------------------
-st.set_page_config(page_title="Sistem Parkir Lengkap", layout="wide")
+st.set_page_config(page_title="Sistem Parkir Lengkap (No external QR libs)", layout="wide")
 
 # init manager and load data
 if "parkir" not in st.session_state:
     st.session_state.parkir = DataParkir()
-    # try to load if file exists
     st.session_state.parkir.load_from_csv(DATA_FILE)
 
 parkir = st.session_state.parkir
@@ -305,8 +298,9 @@ if menu == "Input Kendaraan":
             st.error("Nomor polisi belum valid.")
         else:
             text = f"PLAT:{inp_nopol.strip().upper()}|JENIS:{inp_jenis}|MERK:{inp_merk}|WAKTU:{datetime.now().isoformat()}"
-            png_bytes = generate_qr_bytes(text)
-            st.image(png_bytes, caption="QR Ticket (PNG)", use_column_width=False)
+            qr_url = generate_qr_url(text, size=300)
+            st.image(qr_url, caption="QR Ticket (Google Charts)")
+            st.markdown(f"[Buka/unduh QR di tab baru]({qr_url})", unsafe_allow_html=True)
             st.code(text)
 
 # ---------------- Pencarian & Pembayaran ----------------
@@ -350,9 +344,9 @@ if menu == "Pencarian & Pembayaran":
         node = parkir.search(key2)
         if node:
             text = f"PLAT:{node.nomor_polisi}|MASUK:{node.waktu_masuk.isoformat()}|BIAYA:{node.biaya_parkir}"
-            png_bytes = generate_qr_bytes(text)
-            st.image(png_bytes, caption="QR Ticket (PNG)")
-            st.download_button("Download QR PNG", data=png_bytes, file_name=f"ticket_{node.nomor_polisi}.png", mime="image/png")
+            qr_url = generate_qr_url(text, size=300)
+            st.image(qr_url, caption="QR Ticket (Google Charts)")
+            st.markdown(f"[Buka/unduh QR di tab baru]({qr_url})", unsafe_allow_html=True)
         else:
             st.error("Data tidak ditemukan untuk QR.")
 
@@ -397,7 +391,7 @@ if menu == "Admin / Export":
         st.download_button("Download CSV", data=csv, file_name="parkir_export.csv", mime="text/csv")
 
 st.write("---")
-st.caption("Aplikasi Parkir: fitur lengkap (validation, QR via segno, persistence, notifikasi >24h).")
+st.caption("Aplikasi Parkir: fitur lengkap (validation, QR via Google Charts, persistence, notifikasi >24h).")
 
 
 
