@@ -1,10 +1,10 @@
 import streamlit as st
 import random
 import string
-import json # Tambahan: Untuk File Handling
+import json 
 from datetime import datetime, timedelta
 import pandas as pd
-import os # Tambahan: Untuk operasi file
+import os 
 
 # Nama file untuk menyimpan data
 FILE_PARKIR = 'parking_data.json'
@@ -13,42 +13,38 @@ FILE_PARKIR = 'parking_data.json'
 #       DATA MODEL (LINKED LIST & OOP Lanjutan)
 # ===============================
 
-# Kelas Dasar (Parent Class) untuk demonstrasi Inheritance
 class Kendaraan:
     """Kelas dasar untuk kendaraan, mendemonstrasikan Basic OOP."""
     def __init__(self, nomor_polisi, jenis_kendaraan):
         self.nomor_polisi = nomor_polisi
         self.jenis_kendaraan = jenis_kendaraan
-        self._tarif_dasar = 0  # Contoh variabel yang 'private'
+        self._tarif_dasar = 0
     
     def get_tarif_dasar(self):
         """Method untuk mendapatkan tarif dasar, bisa di-override."""
         return self._tarif_dasar
 
-# Node mewarisi dari Kendaraan (Inheritance)
 class Node(Kendaraan):
     """Representasi data parkir, menggunakan Linked List Node."""
     # Override constructor
     def __init__(self, nomor_polisi, jenis_kendaraan, waktu_masuk_str):
-        # Memanggil constructor Parent Class
         super().__init__(nomor_polisi, jenis_kendaraan)
         
-        # Inisialisasi properti waktu
         self.waktu_masuk = datetime.strptime(waktu_masuk_str, "%H:%M")
 
-        # Simulasi Waktu Keluar & Durasi
-        lama = random.randint(30, 720)  # 30 menit – 12 jam
+        # Catatan: Waktu Keluar dan Durasi Parkir dihitung berdasarkan 
+        # *Simulasi* Durasi (30 menit - 12 jam) karena ini adalah data historis.
+        # Untuk kasus nyata (real-time), properti ini akan diisi saat kendaraan keluar.
+        lama = random.randint(30, 720)  
         self.waktu_keluar = self.waktu_masuk + timedelta(minutes=lama)
         self.durasi_parkir = self.waktu_keluar - self.waktu_masuk
         
-        # Tambahan untuk data bisnis
         self.biaya_parkir = self.hit_biaya()
-        self.status_pembayaran = "Belum Bayar" # Tambahan: Status Pembayaran
-        self.metode_bayar = None # Tambahan: Metode Pembayaran
+        self.status_pembayaran = "Belum Bayar" 
+        self.metode_bayar = None 
         
         self.next = None
 
-    # Override method dari Parent Class (Polymorphism)
     def get_tarif_dasar(self):
         if self.jenis_kendaraan == "Mobil":
             return 5000
@@ -56,19 +52,17 @@ class Node(Kendaraan):
 
     def hit_biaya(self):
         """Menghitung biaya parkir berdasarkan durasi dan jenis kendaraan."""
-        # Menghitung jam penuh (minimal 1 jam)
         jam_total = int(self.durasi_parkir.total_seconds() // 3600)
         jam_total = max(1, jam_total)
         
-        tarif_dasar = self.get_tarif_dasar() # Menggunakan Polymorphism
+        tarif_dasar = self.get_tarif_dasar() 
         tarif_per_jam_berikutnya = 0
         
         if self.jenis_kendaraan == "Mobil":
             tarif_per_jam_berikutnya = 3000
-        else: # Motor
+        else:
             tarif_per_jam_berikutnya = 2000
         
-        # Tarif: Tarif Dasar (jam pertama) + (Jam total - 1) * Tarif per jam berikutnya
         biaya = tarif_dasar + (jam_total - 1) * tarif_per_jam_berikutnya
         return biaya
         
@@ -88,9 +82,9 @@ class DataParkir:
     """Class utama untuk mengelola data parkir menggunakan Linked List."""
     def __init__(self):
         self.head = None
-        self.load_data() # Tambahan: Memuat data saat inisialisasi
+        self.load_data()
 
-    # Tambahan: File Handling (Load Data)
+    # File Handling (Load Data)
     def load_data(self):
         """Memuat data dari FILE_PARKIR (JSON) saat aplikasi dimulai."""
         if os.path.exists(FILE_PARKIR):
@@ -119,9 +113,9 @@ class DataParkir:
                 st.warning("Gagal memuat data parkir (file JSON rusak).")
             except Exception as e:
                 st.error(f"Terjadi kesalahan saat memuat data: {e}")
-        # Jika file tidak ada, head tetap None (Linked List kosong)
+        # Jika file tidak ada, head tetap None
 
-    # Tambahan: File Handling (Save Data)
+    # File Handling (Save Data)
     def save_data(self):
         """Menyimpan data Linked List ke FILE_PARKIR (JSON)."""
         data_to_save = [d.to_dict() for d in self.all_data()]
@@ -133,9 +127,8 @@ class DataParkir:
 
     # Method Linked List (Add)
     def add(self, nomor_polisi, jenis, waktu):
-        # Pengecekan duplikasi
         if self.search(nomor_polisi):
-            return False # Tidak diizinkan menambah data yang sudah ada
+            return False 
             
         node = Node(nomor_polisi, jenis, waktu)
         if not self.head:
@@ -146,7 +139,7 @@ class DataParkir:
                 cur = cur.next
             cur.next = node
             
-        self.save_data() # Simpan setelah penambahan
+        self.save_data()
         return True
 
     # Method Linked List (Search)
@@ -165,25 +158,25 @@ class DataParkir:
 
         if self.head.nomor_polisi == nomor_polisi:
             self.head = self.head.next
-            self.save_data() # Simpan setelah penghapusan
+            self.save_data()
             return True
 
         cur = self.head
         while cur.next:
             if cur.next.nomor_polisi == nomor_polisi:
                 cur.next = cur.next.next
-                self.save_data() # Simpan setelah penghapusan
+                self.save_data()
                 return True
             cur = cur.next
         return False
         
-    # Tambahan: Method untuk Pembayaran
+    # Method untuk Pembayaran
     def bayar(self, nomor_polisi, metode):
         node = self.search(nomor_polisi)
         if node and node.status_pembayaran == "Belum Bayar":
             node.status_pembayaran = "Lunas"
             node.metode_bayar = metode
-            self.save_data() # Simpan setelah pembayaran
+            self.save_data() 
             return True
         return False
 
@@ -204,10 +197,10 @@ class DataParkir:
                 "Jenis": d.jenis_kendaraan,
                 "Masuk": d.waktu_masuk.strftime("%H:%M"),
                 "Keluar": d.waktu_keluar.strftime("%H:%M"),
-                "Durasi": str(d.durasi_parkir).split('.')[0], # Durasi tanpa milidetik
+                "Durasi": str(d.durasi_parkir).split('.')[0],
                 "Biaya (Rp)": f"Rp {d.biaya_parkir:,}",
-                "Pembayaran": d.status_pembayaran, # Tambahan
-                "Metode": d.metode_bayar if d.metode_bayar else "-" # Tambahan
+                "Pembayaran": d.status_pembayaran,
+                "Metode": d.metode_bayar if d.metode_bayar else "-"
             }
             for d in data_list
         ])
@@ -218,7 +211,7 @@ class DataParkir:
 # ===============================
 
 st.set_page_config(page_title="Manajemen Parkir Bisnis", layout="wide")
-st.title("🏢 Sistem Manajemen Data Parkir (Lengkap)")
+st.title("🏢 Sistem Manajemen Data Parkir")
 
 # Init Session
 if "parkir" not in st.session_state:
@@ -226,45 +219,12 @@ if "parkir" not in st.session_state:
 
 parkir = st.session_state.parkir
 
-# Tambahan: Dictionary untuk Metode Pembayaran
-METODE_PEMBAYARAN = { # Contoh penggunaan Dictionary
+# Dictionary untuk Metode Pembayaran
+METODE_PEMBAYARAN = {
     "Tunai": "Cash", 
     "QRIS": "Digital Payment", 
     "Debit/Kredit": "Card Payment"
 }
-
-
-# ===============================
-#   Generate Sample Data
-# ===============================
-
-def generate_data():
-    jenis = ["Mobil", "Motor"]
-    for i in range(20):
-        # Buat nomor polisi unik
-        nomor = f"B {random.randint(1000,9999)} {''.join(random.choices(string.ascii_uppercase, k=3))}"
-        j = random.choice(jenis)
-        
-        # Simulasi waktu (6 pagi hingga 10 malam)
-        waktu_jam = random.randint(6, 22)
-        waktu_menit = random.randint(0, 59)
-        w = f"{waktu_jam:02d}:{waktu_menit:02d}"
-        
-        # Tambah ke Linked List (jika berhasil)
-        parkir.add(nomor, j, w)
-
-
-with st.expander("⚙️ Simulasi dan Pengaturan"):
-    if st.button("Generate Data Parkir (Simulasi Bisnis)"):
-        generate_data()
-        st.success("Data simulasi berhasil ditambahkan dan disimpan!")
-        
-    if st.button("Hapus Semua Data (Reset)"):
-        if os.path.exists(FILE_PARKIR):
-            os.remove(FILE_PARKIR)
-        st.session_state.parkir = DataParkir() # Inisialisasi ulang
-        parkir = st.session_state.parkir
-        st.success("Semua data parkir berhasil dihapus!")
 
 
 # ===============================
@@ -280,7 +240,6 @@ with col1:
 with col2:
     inp_jenis = st.selectbox("Jenis Kendaraan", ["Mobil", "Motor"], key="inp_jenis_add")
 with col3:
-    # Waktu masuk default adalah waktu saat ini (untuk bisnis nyata)
     now_time = datetime.now().strftime("%H:%M") 
     inp_waktu = st.text_input("Waktu Masuk (HH:MM)", now_time, key="inp_waktu_add")
 
@@ -307,8 +266,8 @@ with col_bayar1:
 with col_bayar2:
     bayar_metode = st.selectbox("Metode Pembayaran", list(METODE_PEMBAYARAN.keys()), key="bayar_metode")
 with col_bayar3:
-    st.write(" ") # Spacer
-    st.write(" ") # Spacer
+    st.write(" ")
+    st.write(" ")
     if st.button("Proses Pembayaran"):
         if not bayar_nopol.strip():
             st.error("Nomor Polisi wajib diisi untuk pembayaran.")
@@ -366,21 +325,16 @@ with c2:
 
 
 # ===============================
-#       NOTIFIKASI (Flow Control Lanjut)
+#       NOTIFIKASI 
 # ===============================
 
 st.subheader("⚠️ Notifikasi dan Peringatan")
 
-# Simulasi waktu saat ini untuk perbandingan
-waktu_sekarang = datetime.now()
+DURASI_MAKS = timedelta(hours=24) 
 kendaraan_lama = []
 
-# Loop untuk mencari kendaraan yang parkir > 24 jam (simulasi jam 8 pagi di hari yang berbeda)
-# Perhatian: Karena waktu keluar disimulasikan, kita hanya bisa membandingkan durasi
-DURASI_MAKS = timedelta(hours=24) 
-
 cur = parkir.head
-while cur: # Loop melalui Linked List
+while cur:
     if cur.durasi_parkir > DURASI_MAKS:
         kendaraan_lama.append(cur)
     cur = cur.next
@@ -413,8 +367,7 @@ else:
 
 st.subheader("📊 Statistik Bisnis Parkir")
 
-# Menggunakan List Comprehension untuk perhitungan efisien
-total_pendapatan = sum([d.biaya_parkir for d in data if d.status_pembayaran == "Lunas"]) # Hanya hitung yang Lunas
+total_pendapatan = sum([d.biaya_parkir for d in data if d.status_pembayaran == "Lunas"])
 jml_mobil = len([d for d in data if d.jenis_kendaraan == "Mobil"])
 jml_motor = len([d for d in data if d.jenis_kendaraan == "Motor"])
 jml_lunas = len([d for d in data if d.status_pembayaran == "Lunas"])
