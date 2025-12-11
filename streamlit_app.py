@@ -1,5 +1,5 @@
 import streamlit as st
-from datetime import datetime, timedelta, date, time
+from datetime import datetime, timedelta, date
 import pandas as pd
 
 # ===============================
@@ -144,9 +144,13 @@ st.header("➕ Input Kendaraan Masuk")
 nopol = st.text_input("Nomor Polisi")
 jenis = st.selectbox("Jenis", ["Mobil", "Motor"])
 
-# Pilih tanggal dan jam manual
+# Pilih tanggal lewat calendar
 tanggal = st.date_input("Tanggal Masuk", date.today())
+
+# Input jam manual
 jam = st.time_input("Jam Masuk", datetime.now().time().replace(second=0, microsecond=0))
+
+# Gabungkan tanggal & jam
 waktu_manual = datetime.combine(tanggal, jam)
 
 if st.button("Tambah Kendaraan"):
@@ -155,9 +159,9 @@ if st.button("Tambah Kendaraan"):
     else:
         try:
             manager.add(nopol, jenis, waktu_manual.strftime("%Y-%m-%d %H:%M"))
-            st.success("Data berhasil ditambahkan.")
-        except:
-            st.error("Terjadi kesalahan saat menambahkan data.")
+            st.success(f"Data kendaraan {nopol} berhasil ditambahkan.")
+        except Exception as e:
+            st.error(f"Terjadi kesalahan saat menambahkan data: {e}")
 
 # Cari / Hapus kendaraan
 st.header("🔍 Cari / Hapus Data Kendaraan")
