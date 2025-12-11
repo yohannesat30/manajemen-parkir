@@ -105,10 +105,6 @@ class ParkingManager:
 
     def to_dataframe(self):
         """Mengubah semua record menjadi Pandas DataFrame."""
-        # Filter hanya yang sedang parkir
-        records_in_parking = [r.as_dict() for r in self._records if not r.waktu_keluar]
-        # Tampilkan juga yang sudah keluar
-        # return pd.DataFrame([r.as_dict() for r in self._records])
         return pd.DataFrame([r.as_dict() for r in self._records]).sort_values(by="Masuk", ascending=False)
 
 
@@ -187,7 +183,7 @@ else:
     st.success("👍 Tidak ada kendaraan yang parkir lebih dari 24 jam.")
 
 # -------------------------------
-# Input kendaraan masuk (Fokus Perbaikan di Sini)
+# Input kendaraan masuk 
 # -------------------------------
 st.header("➕ Input Kendaraan Masuk")
 with st.form("input_form"):
@@ -198,83 +194,10 @@ with st.form("input_form"):
     st.subheader("Waktu Masuk")
     col_tanggal, col_waktu = st.columns(2)
     with col_tanggal:
-        # Menghapus 'value' pada date_input untuk menghindari program ke-undo jika user input waktu lalu klik submit
         tanggal = st.date_input("Tanggal Masuk", date.today(), key="input_tanggal_fix")
     with col_waktu:
-        # Menggunakan value=datetime.now().time() agar default ke waktu saat ini
         waktu_manual = st.time_input("Jam & Menit Masuk", value=datetime.now().time(), key="input_waktu_fix")
 
     # Menggabungkan tanggal dan waktu manual secara runut dan konsisten
     waktu_masuk_final = datetime.combine(tanggal, waktu_manual)
-    st.info(f"Waktu Masuk yang akan disimpan: **{waktu_masuk_final.strftime('%Y-%m-%d %H:%M')}**")
-    
-    submitted = st.form_submit_button("✅ Tambah Kendaraan")
-    
-    if submitted:
-        if not nopol.strip():
-            st.error("Nomor polisi wajib diisi.")
-        else:
-            try:
-                # Kirim string waktu yang sudah pasti sesuai input user
-                manager.add(nopol, jenis, waktu_masuk_final.strftime("%Y-%m-%d %H:%M"))
-                st.success(f"Data kendaraan **{nopol}** berhasil ditambahkan pada {waktu_masuk_final.strftime('%Y-%m-%d %H:%M')}.")
-            except ValueError as ve:
-                 st.error(f"❌ Gagal: {str(ve)}")
-            except Exception as e:
-                st.error(f"❌ Terjadi kesalahan tak terduga: {e}")
-
-# -------------------------------
-# Checkout / Pembayaran
-# -------------------------------
-st.header("💳 Pembayaran / Checkout")
-key_checkout = st.text_input("Nomor Polisi untuk Checkout", key="checkout_plate_input_fix").upper() 
-
-# State untuk menyimpan record yang sedang di-checkout
-if "checkout_rec_data" not in st.session_state:
-    st.session_state.checkout_rec_data = None
-
-rec = manager.get(key_checkout)
-if key_checkout and rec:
-    if rec.paid:
-         st.success(f"Kendaraan **{key_checkout}** sudah dibayar pada {rec.payment_time.strftime('%Y-%m-%d %H:%M')} dengan metode {rec.payment_method}.")
-         st.session_state.checkout_rec_data = None # Reset state
-    else:
-        # Tombol Hitung Biaya Parkir (Hanya muncul jika ada kendaraan)
-        if st.button("💰 Hitung Biaya Parkir Sekarang", key="button_hitung_biaya"):
-            rec.set_exit_now() # Set waktu keluar dan hitung biaya
-            # Simpan data record di session state
-            st.session_state.checkout_rec_data = rec.as_dict() 
-            st.session_state.checkout_rec_obj = rec # Simpan juga objek aslinya jika perlu
-            st.info(f"Durasi Parkir: **{rec.durasi_parkir}** | Waktu Keluar: **{rec.waktu_keluar.strftime('%Y-%m-%d %H:%M')}**")
-            st.subheader(f"Total Biaya: **Rp {rec.biaya_parkir:,.0f}**")
-        
-        # Tampilkan form pembayaran setelah biaya dihitung
-        if st.session_state.checkout_rec_data and st.session_state.checkout_rec_data['Nomor Polisi'] == key_checkout:
-            
-            rec_to_pay = st.session_state.checkout_rec_obj
-            
-            st.markdown("---")
-            st.subheader("Pilih Pembayaran")
-            metode = st.selectbox("Metode Pembayaran", ["Cash", "Debit", "Credit Card", "QRIS", "E-Money", "E-Wallet"], key="checkout_method_select_fix")
-            
-            if metode == "Cash":
-                bayar = st.number_input("Bayar (Tunai)", min_value=rec_to_pay.biaya_parkir, step=1000, key="checkout_cash_input_fix")
-                
-                if st.button("💵 Bayar Tunai (Cash)", key="button_pay_cash_fix"):
-                    if bayar < rec_to_pay.biaya_parkir:
-                        st.error("Uang tidak cukup.")
-                    else:
-                        rec_to_pay.mark_paid("Cash")
-                        kembalian = bayar - rec_to_pay.biaya_parkir
-                        st.success(f"Pembayaran **SUKSES**! Kembalian: **Rp {kembalian:,.0f}**")
-                        st.session_state.checkout_rec_data = None # Reset state setelah bayar
-                        st.session_state.checkout_rec_obj = None
-
-            else:
-                if st.button(f"💳 Bayar Non-Tunai ({metode})", key="button_pay_noncash_fix"):
-                    rec_to_pay.mark_paid(metode)
-                    st.success(f"Pembayaran **SUKSES** via **{metode}**.")
-                    st.session_state.checkout_rec_data = None # Reset state setelah bayar
-                    st.session_state.checkout_rec_obj = None
-                    
-elif key_checkout and
+    st.info(f"Waktu Masuk yang akan disimpan: **{waktu_masuk
