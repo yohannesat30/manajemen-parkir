@@ -119,6 +119,7 @@ if "manager" not in st.session_state:
     st.session_state.manager = ParkingManager()
 manager = st.session_state.manager
 
+# Dashboard
 st.header("📊 Dashboard Parkir")
 df = manager.to_dataframe()
 st.dataframe(df, use_container_width=True)
@@ -128,6 +129,8 @@ c1.metric("Pendapatan Hari Ini", f"Rp {stats['pendapatan']:,}")
 c2.metric("Mobil Masuk", stats["mobil"])
 c3.metric("Motor Masuk", stats["motor"])
 c4.metric("Transaksi Selesai", stats["transaksi"])
+
+# Kendaraan parkir >24 jam
 st.subheader("⏰ Kendaraan Parkir > 24 Jam")
 over = manager.overdue_records()
 if over:
@@ -136,19 +139,24 @@ if over:
 else:
     st.success("Tidak ada kendaraan yang parkir lebih dari 24 jam.")
 
+# Input kendaraan masuk
 st.header("➕ Input Kendaraan Masuk")
 nopol = st.text_input("Nomor Polisi")
 jenis = st.selectbox("Jenis", ["Mobil", "Motor"])
-tanggal = st.date_input("Tanggal Masuk", datetime.now().date())
-waktu = st.time_input("Waktu Masuk", datetime.now().time().replace(second=0, microsecond=0))
-dt_masuk = datetime.combine(tanggal, waktu)
-if st.button("Tambah Kendaraan"):
-    if nopol.strip():
-        manager.add(nopol, jenis, dt_masuk.strftime("%Y-%m-%d %H:%M"))
-        st.success("Data berhasil ditambahkan.")
-    else:
-        st.error("Nomor polisi wajib diisi.")
+waktu_manual = st.text_input("Waktu Masuk (Format: YYYY-MM-DD HH:MM)", datetime.now().strftime("%Y-%m-%d %H:%M"))
 
+if st.button("Tambah Kendaraan"):
+    if not nopol.strip():
+        st.error("Nomor polisi wajib diisi.")
+    else:
+        try:
+            dt_masuk = datetime.strptime(waktu_manual.strip(), "%Y-%m-%d %H:%M")
+            manager.add(nopol, jenis, dt_masuk.strftime("%Y-%m-%d %H:%M"))
+            st.success("Data berhasil ditambahkan.")
+        except:
+            st.error("Format waktu salah. Gunakan 'YYYY-MM-DD HH:MM'.")
+
+# Cari / Hapus kendaraan
 st.header("🔍 Cari / Hapus Data Kendaraan")
 key_search = st.text_input("Nomor Polisi untuk Cari/Hapus")
 c1, c2 = st.columns(2)
@@ -168,6 +176,7 @@ with c2:
         else:
             st.error("Nomor polisi tidak ditemukan.")
 
+# Checkout / Pembayaran
 st.header("💳 Pembayaran / Checkout")
 key_checkout = st.text_input("Nomor Polisi untuk Checkout", key="checkout_key")
 
