@@ -6,11 +6,17 @@ import pandas as pd
 #   MODEL & MANAGER
 # ===============================
 class VehicleRecord:
-    def __init__(self, nomor_polisi: str, jenis_kendaraan: str, waktu_masuk: datetime):
+    def __init__(self, nomor_polisi: str, jenis_kendaraan: str, waktu_masuk: str):
         self.nomor_polisi = nomor_polisi.strip()
         self.jenis_kendaraan = jenis_kendaraan
-        # Terima waktu masuk langsung dari input manual tanpa koreksi
-        self.waktu_masuk = waktu_masuk
+        try:
+            # Tetap parse dari string. Format sudah dijamin dari frontend.
+            # *LOGIKA KOREKSI WAKTU DIHAPUS agar waktu input manual tidak berubah*
+            self.waktu_masuk = datetime.strptime(waktu_masuk, "%Y-%m-%d %H:%M")
+        except:
+            # Fallback jika parsing gagal
+            self.waktu_masuk = datetime.now() 
+            
         self.waktu_keluar = None
         self.durasi_parkir = None
         self.biaya_parkir = None
@@ -22,31 +28,28 @@ class VehicleRecord:
         self.waktu_keluar = datetime.now()
         self._calc_durasi_biaya()
 
-    def set_exit_manual(self, waktu_keluar: datetime):
-        """Untuk keluar dengan waktu manual"""
-        self.waktu_keluar = waktu_keluar
-        self._calc_durasi_biaya()
-
     def _calc_durasi_biaya(self):
         if not self.waktu_keluar:
             return
+        
+        # Kalkulasi Durasi
         dur = self.waktu_keluar - self.waktu_masuk
         self.durasi_parkir = dur
         
-        # Hitung durasi dalam jam (pembulatan ke atas)
-        total_detik = dur.total_seconds()
-        jam = int(total_detik // 3600)
+        # Hitung Jam Pembulatan ke atas (minimal 1 jam)
+        total_seconds = dur.total_seconds()
+        # Pembulatan ke jam terdekat ke atas. Contoh: 1 jam 1 menit = 2 jam
+        # Menggunakan ceil jika ada sisa, tapi cara sederhana:
+        # Menghitung jam = (total_seconds + 3599) // 3600 -> ini pembulatan ke atas yang aman
+        jam = int((total_seconds + 3599) // 3600) 
+        jam = max(1, jam) # Minimal 1 jam
         
-        # Jika ada sisa menit lebih dari 0, tambah 1 jam
-        if total_detik % 3600 > 0:
-            jam += 1
-        
-        # Minimal 1 jam
-        jam = max(1, jam)
-        
+        # Kalkulasi Biaya Parkir (menggunakan struktur biaya yang sama)
         if self.jenis_kendaraan == "Mobil":
+            # Jam pertama Rp 5000, jam berikutnya Rp 3000
             self.biaya_parkir = 5000 + (jam - 1) * 3000
-        else:  # Motor
+        else: # Motor
+            # Jam pertama Rp 3000, jam berikutnya Rp 2000
             self.biaya_parkir = 3000 + (jam - 1) * 2000
 
     def mark_paid(self, method: str):
@@ -59,12 +62,11 @@ class VehicleRecord:
             "Nomor Polisi": self.nomor_polisi,
             "Jenis": self.jenis_kendaraan,
             "Masuk": self.waktu_masuk.strftime("%Y-%m-%d %H:%M"),
-            "Keluar": self.waktu_keluar.strftime("%Y-%m-%d %H:%M") if self.waktu_keluar else "Masih Parkir",
-            "Durasi": str(self.durasi_parkir).split('.')[0] if self.durasi_parkir else "",
-            "Biaya (Rp)": f"{self.biaya_parkir:,}" if self.biaya_parkir else "0",
-            "Status Bayar": "✅ Lunas" if self.paid else "❌ Belum",
-            "Metode Bayar": self.payment_method or "",
-            "Waktu Bayar": self.payment_time.strftime("%H:%M") if self.payment_time else ""
+            "Keluar": self.waktu_keluar.strftime("%Y-%m-%d %H:%M") if self.waktu_keluar else "",
+            "Durasi": str(self.durasi_parkir) if self.durasi_parkir else "",
+            "Biaya (Rp)": self.biaya_parkir or 0,
+            "Paid": self.paid,
+            "Payment Method": self.payment_method or ""
         }
 
 class ParkingManager:
@@ -72,8 +74,11 @@ class ParkingManager:
         self._records = []
         self._index = {}
 
-    def add(self, nomor_polisi, jenis, waktu_masuk):
-        rec = VehicleRecord(nomor_polisi, jenis, waktu_masuk)
+    def add(self, nomor_polisi, jenis, waktu):
+        if nomor_polisi in self._index and not self._index[nomor_polisi].waktu_keluar:
+             raise ValueError(f"Kendaraan dengan nopol {nomor_polisi} masih tercatat di dalam.")
+             
+        rec = VehicleRecord(nomor_polisi, jenis, waktu)
         self._records.append(rec)
         self._index[nomor_polisi] = rec
         return rec
@@ -93,32 +98,40 @@ class ParkingManager:
         return self._records
 
     def to_dataframe(self):
-        if not self._records:
-            return pd.DataFrame()
         return pd.DataFrame([r.as_dict() for r in self._records])
 
     def overdue_records(self, hours=24):
         now = datetime.now()
         out = []
         for r in self._records:
-            if not r.waktu_keluar:  # Hanya yang masih parkir
-                dur = now - r.waktu_masuk
-                if dur.total_seconds() > hours * 3600:
-                    out.append(r)
+            # Hanya cek yang masih di dalam
+            if r.waktu_keluar:
+                continue
+                
+            dur = now - r.waktu_masuk
+            if dur.total_seconds() > hours * 3600:
+                # Untuk menampilkan di daftar overdue, kita hitung dulu biaya/durasi saat ini
+                # tanpa mengubah status keluar. set_exit_now() akan mengubah status.
+                # Kita buat VehicleRecord sementara untuk hitungan biaya saat ini.
+                temp_rec = VehicleRecord(r.nomor_polisi, r.jenis_kendaraan, r.waktu_masuk.strftime("%Y-%m-%d %H:%M"))
+                temp_rec.set_exit_now() 
+                out.append(temp_rec)
         return out
 
     def statistics_today(self):
         today = datetime.now().date()
+        # Masuk hari ini: yang waktu masuknya hari ini DAN belum keluar / sudah keluar
         masuk_hari_ini = [r for r in self._records if r.waktu_masuk.date() == today]
+        # Bayar hari ini: yang sudah dibayar DAN waktu bayarnya hari ini
         bayar_hari_ini = [r for r in self._records if r.payment_time and r.payment_time.date() == today]
-        total_pendapatan = sum([r.biaya_parkir or 0 for r in bayar_hari_ini if r.paid])
+        
+        total_pendapatan = sum([r.biaya_parkir or 0 for r in bayar_hari_ini])
+        
         return {
             "pendapatan": total_pendapatan,
-            "mobil": len([r for r in masuk_hari_ini if r.jenis_kendaraan == "Mobil"]),
-            "motor": len([r for r in masuk_hari_ini if r.jenis_kendaraan == "Motor"]),
-            "transaksi": len(bayar_hari_ini),
-            "total_kendaraan": len(masuk_hari_ini),
-            "parkir_aktif": len([r for r in self._records if not r.waktu_keluar])
+            "mobil": len([r for r in masuk_hari ini if r.jenis_kendaraan == "Mobil"]),
+            "motor": len([r for r in masuk_hari ini if r.jenis_kendaraan == "Motor"]),
+            "transaksi": len(bayar_hari_ini)
         }
 
 # ===============================
@@ -127,247 +140,144 @@ class ParkingManager:
 st.set_page_config(page_title="Sistem Parkir Outlet", layout="wide")
 st.title("🏢 Sistem Manajemen Data Parkir Outlet Bisnis")
 
-# Inisialisasi session state
 if "manager" not in st.session_state:
     st.session_state.manager = ParkingManager()
-if "show_payment" not in st.session_state:
-    st.session_state.show_payment = False
-if "current_plate" not in st.session_state:
-    st.session_state.current_plate = None
-
 manager = st.session_state.manager
 
 # -------------------------------
 # Dashboard
 # -------------------------------
 st.header("📊 Dashboard Parkir")
-
-# Statistik
-stats = manager.statistics_today()
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Pendapatan Hari Ini", f"Rp {stats['pendapatan']:,}")
-col2.metric("Mobil Masuk", stats["mobil"])
-col3.metric("Motor Masuk", stats["motor"])
-col4.metric("Transaksi Selesai", stats["transaksi"])
-col5.metric("Parkir Aktif", stats["parkir_aktif"])
-
-# Tabel Data
-st.subheader("📋 Data Semua Kendaraan")
 df = manager.to_dataframe()
-if not df.empty:
-    st.dataframe(df, use_container_width=True, height=300)
-else:
-    st.info("Belum ada data kendaraan.")
+st.dataframe(df, use_container_width=True)
+
+stats = manager.statistics_today()
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Pendapatan Hari Ini", f"Rp {stats['pendapatan']:,}")
+c2.metric("Mobil Masuk Hari Ini", stats["mobil"])
+c3.metric("Motor Masuk Hari Ini", stats["motor"])
+c4.metric("Transaksi Selesai Hari Ini", stats["transaksi"])
 
 # -------------------------------
-# Kendaraan parkir >24 jam
+# Kendaraan parkir >24 jam (yang masih di dalam)
 # -------------------------------
-st.subheader("⏰ Kendaraan Parkir > 24 Jam")
+st.subheader("⏰ Kendaraan Parkir > 24 Jam (Masih di dalam)")
 over = manager.overdue_records()
 if over:
-    st.warning(f"⚠️ {len(over)} kendaraan parkir lebih dari 24 jam!")
-    over_df = pd.DataFrame([r.as_dict() for r in over])
-    st.dataframe(over_df, use_container_width=True)
+    st.warning(f"{len(over)} kendaraan parkir lebih dari 24 jam.")
+    st.dataframe(pd.DataFrame([r.as_dict() for r in over]), use_container_width=True)
 else:
-    st.success("✅ Tidak ada kendaraan yang parkir lebih dari 24 jam.")
+    st.success("Tidak ada kendaraan yang parkir lebih dari 24 jam.")
 
 # -------------------------------
-# Input kendaraan masuk - FULL MANUAL
+# Input kendaraan masuk (Perbaikan di sini)
 # -------------------------------
 st.header("➕ Input Kendaraan Masuk")
-with st.expander("Tambah Kendaraan Baru", expanded=True):
-    col1, col2 = st.columns(2)
+with st.form("input_form"):
+    nopol = st.text_input("Nomor Polisi", key="input_nopol").upper() # Uppercase untuk konsistensi
+    jenis = st.selectbox("Jenis", ["Mobil", "Motor"], key="input_jenis")
     
-    with col1:
-        nopol = st.text_input("Nomor Polisi*", placeholder="Contoh: B 1234 ABC")
-        jenis = st.selectbox("Jenis Kendaraan*", ["Mobil", "Motor"])
+    col_tanggal, col_waktu = st.columns(2)
+    with col_tanggal:
+        tanggal = st.date_input("Tanggal Masuk", date.today(), key="input_tanggal")
+    with col_waktu:
+        # Menggunakan value=None untuk memastikan user *memilih* waktu atau default ke 00:00:00
+        # Jika menggunakan datetime.now().time(), akan selalu berubah saat refresh
+        waktu_manual = st.time_input("Jam & Menit Masuk", value=datetime.now().time(), key="input_waktu")
+
+    # Menggabungkan tanggal dan waktu manual
+    waktu_masuk_final = datetime.combine(tanggal, waktu_manual)
+    st.info(f"Waktu Masuk yang akan disimpan: **{waktu_masuk_final.strftime('%Y-%m-%d %H:%M')}**")
     
-    with col2:
-        # Input tanggal dan waktu manual sepenuhnya
-        tanggal_masuk = st.date_input("Tanggal Masuk*", date.today())
-        waktu_masuk = st.time_input("Waktu Masuk*", value=datetime.now().time())
+    submitted = st.form_submit_button("Tambah Kendaraan")
     
-    # Gabungkan tanggal dan waktu
-    waktu_masuk_dt = datetime.combine(tanggal_masuk, waktu_masuk)
-    
-    st.info(f"**Waktu Masuk yang dipilih:** {waktu_masuk_dt.strftime('%A, %d %B %Y %H:%M')}")
-    
-    if st.button("🚗 Simpan Data Masuk", type="primary", use_container_width=True):
+    if submitted:
         if not nopol.strip():
-            st.error("❌ Nomor polisi wajib diisi!")
+            st.error("Nomor polisi wajib diisi.")
         else:
-            # Cek apakah nomor polisi sudah ada dan masih parkir
-            existing = manager.get(nopol)
-            if existing and not existing.waktu_keluar:
-                st.error(f"❌ Kendaraan {nopol} masih tercatat parkir!")
-            else:
-                try:
-                    manager.add(nopol, jenis, waktu_masuk_dt)
-                    st.success(f"✅ Data kendaraan **{nopol}** berhasil ditambahkan!")
-                    st.balloons()
-                except Exception as e:
-                    st.error(f"❌ Terjadi kesalahan: {str(e)}")
+            try:
+                # Kirim string waktu yang sudah pasti sesuai input user
+                manager.add(nopol, jenis, waktu_masuk_final.strftime("%Y-%m-%d %H:%M"))
+                st.success(f"Data kendaraan **{nopol}** berhasil ditambahkan pada {waktu_masuk_final.strftime('%Y-%m-%d %H:%M')}.")
+            except ValueError as ve:
+                 st.error(str(ve))
+            except Exception as e:
+                st.error(f"Terjadi kesalahan saat menambahkan data: {e}")
 
 # -------------------------------
-# Cari / Edit / Hapus kendaraan
+# Cari / Hapus kendaraan
 # -------------------------------
-st.header("🔍 Cari / Kelola Data Kendaraan")
-search_tab, delete_tab = st.tabs(["🔎 Cari Data", "🗑️ Hapus Data"])
-
-with search_tab:
-    search_key = st.text_input("Masukkan Nomor Polisi untuk pencarian")
-    if search_key:
-        record = manager.get(search_key)
-        if record:
-            st.success(f"✅ Data ditemukan untuk {search_key}")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("📋 Detail Kendaraan")
-                data_dict = record.as_dict()
-                for key, value in data_dict.items():
-                    st.write(f"**{key}:** {value}")
-            
-            with col2:
-                st.subheader("🛠️ Aksi")
-                if not record.waktu_keluar:
-                    if st.button("🚪 Hitung Biaya & Checkout", type="secondary", use_container_width=True):
-                        record.set_exit_now()
-                        st.session_state.show_payment = True
-                        st.session_state.current_plate = search_key
-                        st.rerun()
-                else:
-                    st.info("✅ Kendaraan sudah checkout")
-                    
-                    if not record.paid:
-                        if st.button("💳 Lanjutkan Pembayaran", type="primary", use_container_width=True):
-                            st.session_state.show_payment = True
-                            st.session_state.current_plate = search_key
-                            st.rerun()
-        else:
-            st.error("❌ Data tidak ditemukan")
-
-with delete_tab:
-    del_key = st.text_input("Masukkan Nomor Polisi untuk dihapus")
-    if st.button("🗑️ Hapus Data Permanen", type="secondary"):
-        if del_key:
-            if manager.delete(del_key):
-                st.success(f"✅ Data {del_key} berhasil dihapus!")
+st.header("🔍 Cari / Hapus Data Kendaraan")
+key_search = st.text_input("Nomor Polisi untuk Cari/Hapus", key="search_delete_key").upper() # Uppercase untuk konsistensi
+c1, c2 = st.columns(2)
+with c1:
+    if st.button("Cari Kendaraan", key="button_search"):
+        r = manager.get(key_search)
+        if r:
+            # Hitung biaya/durasi saat ini jika belum keluar
+            if not r.waktu_keluar:
+                # Buat objek sementara untuk menampilkan perhitungan saat ini tanpa mengubah data asli
+                temp_rec = VehicleRecord(r.nomor_polisi, r.jenis_kendaraan, r.waktu_masuk.strftime("%Y-%m-%d %H:%M"))
+                temp_rec.set_exit_now() 
+                st.info(f"Ditemukan! Status: **Belum Keluar**. Perkiraan Biaya/Durasi saat ini:")
+                st.json(temp_rec.as_dict())
             else:
-                st.error("❌ Nomor polisi tidak ditemukan")
+                 st.info("Ditemukan! Status: **Sudah Keluar/Bayar**.")
+                 st.json(r.as_dict())
+        else:
+            st.error("Data tidak ditemukan.")
+with c2:
+    if st.button("Hapus Kendaraan", key="button_delete"):
+        if manager.delete(key_search):
+            st.success(f"Data **{key_search}** berhasil dihapus.")
+        else:
+            st.error("Nomor polisi tidak ditemukan.")
 
 # -------------------------------
 # Checkout / Pembayaran
 # -------------------------------
-if st.session_state.show_payment and st.session_state.current_plate:
-    st.header("💳 Pembayaran & Checkout")
-    
-    record = manager.get(st.session_state.current_plate)
-    if record:
-        # Hitung biaya jika belum
-        if not record.biaya_parkir:
-            if not record.waktu_keluar:
-                record.set_exit_now()
-            else:
-                record._calc_durasi_biaya()
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("Detail Pembayaran")
-            st.write(f"**Nomor Polisi:** {record.nomor_polisi}")
-            st.write(f"**Jenis:** {record.jenis_kendaraan}")
-            st.write(f"**Waktu Masuk:** {record.waktu_masuk.strftime('%Y-%m-%d %H:%M')}")
-            st.write(f"**Waktu Keluar:** {record.waktu_keluar.strftime('%Y-%m-%d %H:%M')}")
-            st.write(f"**Durasi:** {str(record.durasi_parkir).split('.')[0]}")
-            st.write(f"**Biaya Parkir:** Rp {record.biaya_parkir:,}")
-        
-        with col2:
-            st.subheader("Metode Pembayaran")
-            
-            if not record.paid:
-                metode = st.selectbox(
-                    "Pilih Metode Pembayaran",
-                    ["Cash", "Debit", "Credit Card", "QRIS", "E-Money", "E-Wallet"],
-                    key="payment_method"
-                )
-                
-                if metode == "Cash":
-                    st.write(f"**Total:** Rp {record.biaya_parkir:,}")
-                    bayar = st.number_input(
-                        "Masukkan jumlah uang",
-                        min_value=0,
-                        value=record.biaya_parkir,
-                        step=1000
-                    )
-                    
-                    kembalian = bayar - record.biaya_parkir
-                    if kembalian >= 0:
-                        st.success(f"Kembalian: Rp {kembalian:,}")
-                    else:
-                        st.error(f"Kurang: Rp {abs(kembalian):,}")
-                    
-                    col_btn1, col_btn2 = st.columns(2)
-                    with col_btn1:
-                        if st.button("💵 Proses Pembayaran Cash", type="primary", use_container_width=True):
-                            if bayar >= record.biaya_parkir:
-                                record.mark_paid("Cash")
-                                st.success("✅ Pembayaran cash berhasil!")
-                                st.session_state.show_payment = False
-                                st.session_state.current_plate = None
-                                st.rerun()
-                            else:
-                                st.error("❌ Jumlah pembayaran tidak mencukupi")
-                    
-                    with col_btn2:
-                        if st.button("❌ Batalkan", type="secondary", use_container_width=True):
-                            st.session_state.show_payment = False
-                            st.session_state.current_plate = None
-                            st.rerun()
-                
-                else:  # Non-cash
-                    col_btn1, col_btn2 = st.columns(2)
-                    with col_btn1:
-                        if st.button(f"💳 Bayar via {metode}", type="primary", use_container_width=True):
-                            record.mark_paid(metode)
-                            st.success(f"✅ Pembayaran via {metode} berhasil!")
-                            st.session_state.show_payment = False
-                            st.session_state.current_plate = None
-                            st.rerun()
-                    
-                    with col_btn2:
-                        if st.button("❌ Batalkan", type="secondary", use_container_width=True):
-                            st.session_state.show_payment = False
-                            st.session_state.current_plate = None
-                            st.rerun()
-            else:
-                st.success("✅ Pembayaran sudah lunas!")
-                st.write(f"**Metode:** {record.payment_method}")
-                st.write(f"**Waktu Bayar:** {record.payment_time.strftime('%Y-%m-%d %H:%M')}")
-                
-                if st.button("Kembali ke Dashboard", type="secondary"):
-                    st.session_state.show_payment = False
-                    st.session_state.current_plate = None
-                    st.rerun()
+st.header("💳 Pembayaran / Checkout")
+key_checkout = st.text_input("Nomor Polisi untuk Checkout", key="checkout_plate_input").upper() # Uppercase untuk konsistensi
 
-# -------------------------------
-# Export Data
-# -------------------------------
-st.header("📤 Export Data")
-if st.button("📥 Download Data sebagai CSV", use_container_width=True):
-    df = manager.to_dataframe()
-    if not df.empty:
-        csv = df.to_csv(index=False)
-        st.download_button(
-            label="⬇️ Klik untuk Download",
-            data=csv,
-            file_name=f"data_parkir_{date.today()}.csv",
-            mime="text/csv"
-        )
+if "checkout_rec" not in st.session_state:
+    st.session_state.checkout_rec = None
+
+if key_checkout:
+    rec = manager.get(key_checkout)
+    if not rec:
+        st.error("Data tidak ditemukan.")
+    elif rec.paid:
+         st.success(f"Kendaraan **{key_checkout}** sudah dibayar pada {rec.payment_time.strftime('%Y-%m-%d %H:%M')} dengan metode {rec.payment_method}.")
     else:
-        st.warning("Tidak ada data untuk diexport")
-
-# -------------------------------
-# Footer
-# -------------------------------
-st.divider()
-st.caption(f"© {datetime.now().year} Sistem Parkir Outlet | Terakhir diperbarui: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        # Tampilkan tombol Hitung Biaya
+        if st.button("Hitung Biaya Parkir Sekarang"):
+            rec.set_exit_now()
+            st.session_state.checkout_rec = rec
+            st.info(f"Durasi Parkir: **{rec.durasi_parkir}**")
+            st.info(f"Biaya Parkir: **Rp {rec.biaya_parkir:,.0f}**")
+        
+        # Tampilkan form pembayaran setelah biaya dihitung
+        if st.session_state.checkout_rec and st.session_state.checkout_rec.nomor_polisi == key_checkout:
+            rec_to_pay = st.session_state.checkout_rec
+            
+            st.subheader(f"Total Biaya: Rp {rec_to_pay.biaya_parkir:,.0f}")
+            metode = st.selectbox("Metode Pembayaran", ["Cash", "Debit", "Credit Card", "QRIS", "E-Money", "E-Wallet"], key="checkout_method_select")
+            
+            if metode == "Cash":
+                bayar = st.number_input("Bayar (Tunai)", min_value=rec_to_pay.biaya_parkir, step=1000, key="checkout_cash_input")
+                
+                if st.button("Bayar Tunai (Cash)", key="button_pay_cash"):
+                    if bayar < rec_to_pay.biaya_parkir:
+                        st.error("Uang tidak cukup.")
+                    else:
+                        rec_to_pay.mark_paid("Cash")
+                        kembalian = bayar - rec_to_pay.biaya_parkir
+                        st.success(f"Pembayaran berhasil. Kembalian: **Rp {kembalian:,.0f}**")
+                        st.json(rec_to_pay.as_dict())
+                        st.session_state.checkout_rec = None
+            else:
+                if st.button(f"Bayar Non-Tunai ({metode})", key="button_pay_noncash"):
+                    rec_to_pay.mark_paid(metode)
+                    st.success(f"Pembayaran berhasil via **{metode}**.")
+                    st.json(rec_to_pay.as_dict())
+                    st.session_state.checkout_rec = None
