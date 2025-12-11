@@ -1,11 +1,9 @@
 import streamlit as st
-import random
-import string
-from datetime import datetime, timedelta
+from datetime import datetime
 import pandas as pd
 
 # ===============================
-#   MODEL: VehicleRecord & Manager
+#   MODEL & MANAGER
 # ===============================
 class VehicleRecord:
     def __init__(self, nomor_polisi: str, jenis_kendaraan: str, waktu_masuk: str):
@@ -111,29 +109,26 @@ class ParkingManager:
             "transaksi": len(bayar_hari_ini)
         }
 
-
 # ===============================
-#       STREAMLIT UI
+#       STREAMLIT UI SEDERHANA
 # ===============================
-st.set_page_config(page_title="Sistem Manajemen Data Parkir Outlet Bisnis", layout="wide")
+st.set_page_config(page_title="Sistem Parkir Outlet", layout="wide")
 st.title("🏢 Sistem Manajemen Data Parkir Outlet Bisnis")
 
 if "manager" not in st.session_state:
     st.session_state.manager = ParkingManager()
 manager = st.session_state.manager
 
-menu = st.sidebar.selectbox("Menu", ["Dashboard", "Input Kendaraan", "Cari / Hapus", "Pembayaran (Checkout)"])
-
+tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "Input Kendaraan", "Cari / Hapus", "Pembayaran"])
 
 # ===============================
 # Dashboard
 # ===============================
-if menu == "Dashboard":
-    st.header("📊 Dashboard Parkir Outlet")
+with tab1:
+    st.header("📊 Dashboard Parkir")
     df = manager.to_dataframe()
     st.dataframe(df, use_container_width=True)
     stats = manager.statistics_today()
-    st.subheader("📆 Statistik Harian")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Pendapatan Hari Ini", f"Rp {stats['pendapatan']:,}")
     c2.metric("Mobil Masuk", stats["mobil"])
@@ -147,30 +142,28 @@ if menu == "Dashboard":
     else:
         st.success("Tidak ada kendaraan yang parkir lebih dari 24 jam.")
 
-
 # ===============================
 # Input Kendaraan
 # ===============================
-elif menu == "Input Kendaraan":
+with tab2:
     st.header("➕ Input Kendaraan Masuk")
     nopol = st.text_input("Nomor Polisi")
     jenis = st.selectbox("Jenis", ["Mobil", "Motor"])
     waktu = st.text_input("Waktu Masuk (HH:MM)", datetime.now().strftime("%H:%M"))
-    if st.button("Tambah"):
+    if st.button("Tambah Kendaraan"):
         if nopol.strip():
             manager.add(nopol, jenis, waktu)
             st.success("Data berhasil ditambahkan.")
         else:
             st.error("Nomor polisi wajib diisi.")
 
-
 # ===============================
-# Cari / Hapus Kendaraan
+# Cari / Hapus
 # ===============================
-elif menu == "Cari / Hapus":
+with tab3:
     st.header("🔍 Cari / Hapus Data Kendaraan")
-    key = st.text_input("Nomor Polisi")
-    if st.button("Cari"):
+    key = st.text_input("Nomor Polisi untuk Cari/Hapus", key="key_search")
+    if st.button("Cari Kendaraan"):
         r = manager.get(key)
         if r:
             if not r.waktu_keluar:
@@ -178,21 +171,19 @@ elif menu == "Cari / Hapus":
             st.write(r.as_dict())
         else:
             st.error("Data tidak ditemukan.")
-    if st.button("Hapus"):
+    if st.button("Hapus Kendaraan"):
         if manager.delete(key):
             st.success("Data berhasil dihapus.")
         else:
             st.error("Nomor polisi tidak ditemukan.")
 
-
 # ===============================
-# Pembayaran Runut
+# Pembayaran
 # ===============================
-elif menu == "Pembayaran (Checkout)":
+with tab4:
     st.header("💳 Pembayaran / Checkout")
-    key = st.text_input("Nomor Polisi untuk Checkout")
+    key = st.text_input("Nomor Polisi untuk Checkout", key="key_checkout")
 
-    # Pastikan session_state menyimpan state per plat
     if "checkout_plate" not in st.session_state:
         st.session_state.checkout_plate = None
     if "checkout_method" not in st.session_state:
@@ -203,19 +194,16 @@ elif menu == "Pembayaran (Checkout)":
         if not rec:
             st.error("Data tidak ditemukan.")
         else:
-            # Step 1: Tampilkan biaya dan durasi
             if st.button("Hitung Biaya"):
                 rec.set_exit_now()
                 st.session_state.checkout_plate = key
                 st.info(f"Durasi Parkir: {rec.durasi_parkir}")
                 st.info(f"Biaya Parkir: Rp {rec.biaya_parkir:,}")
 
-            # Step 2: Pilih metode
             if st.session_state.checkout_plate == key:
                 metode = st.selectbox("Metode Pembayaran", ["Cash", "Debit", "Credit Card", "QRIS", "E-Money", "E-Wallet"])
                 st.session_state.checkout_method = metode
 
-                # Step 3: Proses pembayaran
                 if metode == "Cash":
                     bayar = st.number_input("Bayar (Tunai)", min_value=0, step=1000)
                     if st.button("Bayar (Cash)"):
@@ -226,7 +214,6 @@ elif menu == "Pembayaran (Checkout)":
                             kembalian = bayar - rec.biaya_parkir
                             st.success(f"Pembayaran berhasil. Kembalian: Rp {kembalian:,}")
                             st.write(rec.as_dict())
-                            # reset session
                             st.session_state.checkout_plate = None
                             st.session_state.checkout_method = None
                 else:
