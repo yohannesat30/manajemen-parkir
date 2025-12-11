@@ -5,101 +5,18 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 # ===============================
-#     DATA MODEL (LINKED LIST)
-# ===============================
-class Node:
-    def __init__(self, nomor_polisi, jenis_kendaraan, waktu_masuk, metode_bayar):
-        self.nomor_polisi = nomor_polisi
-        self.jenis_kendaraan = jenis_kendaraan
-        self.waktu_masuk = datetime.strptime(waktu_masuk, "%H:%M")
-        self.metode_bayar = metode_bayar
-
-        # Random waktu keluar
-        lama = random.randint(30, 720)  # dalam menit
-        self.waktu_keluar = self.waktu_masuk + timedelta(minutes=lama)
-
-        self.durasi_parkir = self.waktu_keluar - self.waktu_masuk
-        self.biaya_parkir = self.hitung_biaya()
-        self.status_bayar = "Belum Dibayar"
-        self.next = None
-
-    def hitung_biaya(self):
-        jam = int(self.durasi_parkir.total_seconds() // 3600)
-        jam = max(1, jam)
-
-        if self.jenis_kendaraan == "Mobil":
-            return 5000 + (jam - 1) * 3000
-        return 3000 + (jam - 1) * 2000
-
-
-class DataParkir:
-    def __init__(self):
-        self.head = None
-
-    def add(self, nomor_polisi, jenis, waktu, metode):
-        node = Node(nomor_polisi, jenis, waktu, metode)
-        if not self.head:
-            self.head = node
-        else:
-            cur = self.head
-            while cur.next:
-                cur = cur.next
-            cur.next = node
-
-    def search(self, nomor_polisi):
-        cur = self.head
-        while cur:
-            if cur.nomor_polisi == nomor_polisi:
-                return cur
-            cur = cur.next
-        return None
-
-    def delete(self, nomor_polisi):
-        if not self.head:
-            return False
-
-        if self.head.nomor_polisi == nomor_polisi:
-            self.head = self.head.next
-            return True
-
-        cur = self.head
-        while cur.next:
-            if cur.next.nomor_polisi == nomor_polisi:
-                cur.next = cur.next.next
-                return True
-            cur = cur.next
-        return False
-
-    def all_data(self):
-        data = []
-        cur = self.head
-        while cur:
-            data.append(cur)
-            cur = cur.next
-        return data
-
-    def to_df(self, data_list):
-        return pd.DataFrame([
-            {
-                "Nomor Polisi": d.nomor_polisi,
-                "Jenis": d.jenis_kendaraan,
-                "Metode Bayar": d.metode_bayar,
-                "Status": d.status_bayar,
-                "Masuk": d.waktu_masuk.strftime("%H:%M"),
-                "Keluar": d.waktu_keluar.strftime("%H:%M"),
-                "Durasi": str(d.durasi_parkir),
-                "Biaya (Rp)": d.biaya_parkir
-            }
-            for d in data_list
-        ])
-
-
-# ===============================
-#         STREAMLIT UI
+#         STREAMLIT UI + MENU
 # ===============================
 
 st.set_page_config(page_title="Manajemen Parkir Pelanggan", layout="wide")
-st.title("🏢 Sistem Manajemen Data Parkir (Enhanced)")
+
+# Sidebar Menu
+menu = st.sidebar.radio(
+    "📌 Menu",
+    ["Dashboard", "Input Kendaraan", "Pencarian & Pembayaran", "Data Parkir"]
+)
+
+st.title("🏢 Sistem Manajemen Data Parkir (Enhanced)")("🏢 Sistem Manajemen Data Parkir (Enhanced)")
 
 # Init Session
 if "parkir" not in st.session_state:
@@ -216,5 +133,6 @@ colA.metric("Total Pendapatan", f"Rp {total_pendapatan:,}")
 colB.metric("Jumlah Mobil", jml_mobil)
 colC.metric("Jumlah Motor", jml_motor)
 colD.metric("Transaksi Lunas", jml_sudah_bayar)
+
 
 
