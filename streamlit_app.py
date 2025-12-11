@@ -161,4 +161,219 @@ class DataParkir:
         if node and node.status_pembayaran == "Belum Bayar":
             node.status_pembayaran = "Lunas"
             node.metode_bayar = metode
-            self.save_data()
+            self.save_data() 
+            return True
+        return False
+
+    def all_data(self):
+        data = []
+        cur = self.head
+        while cur:
+            data.append(cur)
+            cur = cur.next
+        return data
+
+    def to_df(self, data_list):
+        return pd.DataFrame([
+            {
+                "Nomor Polisi": d.nomor_polisi,
+                "Jenis": d.jenis_kendaraan,
+                "Masuk": d.waktu_masuk.strftime("%H:%M"),
+                "Keluar": d.waktu_keluar.strftime("%H:%M"),
+                "Durasi": str(d.durasi_parkir).split('.')[0],
+                "Biaya (Rp)": f"Rp {d.biaya_parkir:,}",
+                "Pembayaran": d.status_pembayaran,
+                "Metode": d.metode_bayar if d.metode_bayar else "-"
+            }
+            for d in data_list
+        ])
+
+
+# ===============================
+#       STREAMLIT UI
+# ===============================
+
+st.set_page_config(page_title="Manajemen Parkir Bisnis", layout="wide")
+st.title("🏢 Sistem Manajemen Data Parkir")
+
+# Init Session
+if "parkir" not in st.session_state:
+    st.session_state.parkir = DataParkir()
+
+parkir = st.session_state.parkir
+
+METODE_PEMBAYARAN = {
+    "Tunai": "Cash", 
+    "QRIS": "Digital Payment", 
+    "Debit/Kredit": "Card Payment"
+}
+
+# ===============================
+#       FITUR RESET DATA 
+# ===============================
+
+st.subheader("🗑️ Kelola Data Persisten")
+
+if st.button("Hapus Semua Data Parkir (Reset File)", help="Ini akan menghapus semua data yang tersimpan di memori dan file parking_data.json."):
+    if os.path.exists(FILE_PARKIR):
+        os.remove(FILE_PARKIR)
+    st.session_state.parkir = DataParkir() 
+    st.success("Semua data parkir berhasil dihapus! Aplikasi direset.")
+    st.rerun() 
+
+
+# ===============================
+#       INPUT DATA
+# ===============================
+
+st.subheader("➕ Input Kendaraan Masuk")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    inp_nopol = st.text_input("Nomor Polisi", key="inp_nopol_add")
+with col2:
+    inp_jenis = st.selectbox("Jenis Kendaraan", ["Mobil", "Motor"], key="inp_jenis_add")
+with col3:
+    now_time = datetime.now().strftime("%H:%M") 
+    inp_waktu = st.text_input("Waktu Masuk (HH:MM)", now_time, key="inp_waktu_add")
+
+if st.button("Tambah Data Kendaraan Masuk"):
+    if inp_nopol:
+        if parkir.add(inp_nopol.strip().upper(), inp_jenis, inp_waktu.strip()):
+            st.success(f"Data parkir untuk **{inp_nopol.strip().upper()}** ditambahkan dan **disimpan**!")
+        else:
+            st.warning(f"Nomor Polisi **{inp_nopol.strip().upper()}** sudah ada!")
+    else:
+        st.error("Nomor polisi wajib diisi.")
+
+
+# ===============================
+#       PEMBAYARAN
+# ===============================
+
+st.subheader("💳 Pembayaran Kendaraan Keluar")
+
+col_bayar1, col_bayar2, col_bayar3 = st.columns(3)
+
+with col_bayar1:
+    bayar_nopol = st.text_input("Nomor Polisi Kendaraan Keluar", key="bayar_nopol")
+with col_bayar2:
+    bayar_metode = st.selectbox("Metode Pembayaran", list(METODE_PEMBAYARAN.keys()), key="bayar_metode")
+with col_bayar3:
+    st.write(" ")
+    st.write(" ")
+    if st.button("Proses Pembayaran"):
+        if not bayar_nopol.strip():
+            st.error("Nomor Polisi wajib diisi untuk pembayaran.")
+        else:
+            nopol_bayar = bayar_nopol.strip().upper()
+            node = parkir.search(nopol_bayar)
+            if node:
+                if node.status_pembayaran == "Lunas":
+                    st.warning(f"Nomor Polisi **{nopol_bayar}** sudah lunas.")
+                else:
+                    if parkir.bayar(nopol_bayar, bayar_metode):
+                        st.success(f"Pembayaran **Lunas** untuk **{nopol_bayar}** sebesar **Rp {node.biaya_parkir:,}** dengan metode **{bayar_metode}**.")
+                        st.balloons()
+                    else:
+                        st.error(f"Gagal memproses pembayaran untuk **{nopol_bayar}**.")
+            else:
+                st.error(f"Nomor Polisi **{nopol_bayar}** tidak ditemukan.")
+
+
+# ===============================
+#       SEARCH / DELETE
+# ===============================
+
+st.subheader("🔍 Cari atau Hapus Data Parkir")
+
+search_key = st.text_input("Cari berdasarkan Nomor Polisi", key="search_nopol")
+
+c1, c2 = st.columns(2)
+
+with c1:
+    if st.button("Cari Data"):
+        result = parkir.search(search_key.strip().upper())
+        if result:
+            st.info(
+                f"### **Data Ditemukan!**\n\n"
+                f"*Nomor Polisi:* **{result.nomor_polisi}**\n"
+                f"*Jenis:* {result.jenis_kendaraan}\n"
+                f"*Masuk:* {result.waktu_masuk.strftime('%H:%M')}\n"
+                f"*Keluar:* {result.waktu_keluar.strftime('%H:%M')}\n"
+                f"*Durasi:* {str(result.durasi_parkir).split('.')[0]}\n"
+                f"*Biaya:* **Rp {result.biaya_parkir:,}**\n"
+                f"*Status Bayar:* **{result.status_pembayaran}**\n"
+                f"*Metode Bayar:* {result.metode_bayar if result.metode_bayar else '-'}"
+            )
+        else:
+            st.warning("Data tidak ditemukan.")
+
+with c2:
+    if st.button("Hapus Data"):
+        nopol_hapus = search_key.strip().upper()
+        if parkir.delete(nopol_hapus):
+            st.success(f"Data **{nopol_hapus}** berhasil dihapus dan **disimpan**!")
+        else:
+            st.error("Nomor polisi tidak ditemukan.")
+
+
+# ===============================
+#       NOTIFIKASI 
+# ===============================
+
+st.subheader("⚠️ Notifikasi dan Peringatan")
+
+DURASI_MAKS = timedelta(hours=24) 
+kendaraan_lama = []
+
+cur = parkir.head
+while cur:
+    if cur.durasi_parkir > DURASI_MAKS:
+        kendaraan_lama.append(cur)
+    cur = cur.next
+
+if kendaraan_lama:
+    st.error(f"🛑 **{len(kendaraan_lama)}** Kendaraan parkir lebih dari {str(DURASI_MAKS).split('.')[0]}!")
+    for k in kendaraan_lama:
+        st.write(f"- **{k.nomor_polisi}** ({k.jenis_kendaraan}). Durasi: **{str(k.durasi_parkir).split('.')[0]}**.")
+else:
+    st.success("✅ Tidak ada kendaraan yang parkir lebih dari 24 jam (simulasi).")
+
+
+# ===============================
+#       TABEL DATA
+# ===============================
+
+st.subheader("📋 Data Parkir Kendaraan")
+
+data = parkir.all_data()
+if data:
+    df = parkir.to_df(data)
+    st.dataframe(df, use_container_width=True)
+else:
+    st.info("Belum ada data parkir.")
+
+
+# ===============================
+#           KPI SUMMARY
+# ===============================
+
+st.subheader("📊 Statistik Bisnis Parkir")
+
+total_pendapatan = sum([d.biaya_parkir for d in data if d.status_pembayaran == "Lunas"])
+jml_mobil = len([d for d in data if d.jenis_kendaraan == "Mobil"])
+jml_motor = len([d for d in data if d.jenis_kendaraan == "Motor"])
+jml_lunas = len([d for d in data if d.status_pembayaran == "Lunas"])
+jml_belum_bayar = len(data) - jml_lunas
+
+colA, colB, colC, colD, colE = st.columns(5)
+
+colA.metric("Total Kendaraan", len(data))
+colB.metric("Jumlah Mobil", jml_mobil)
+colC.metric("Jumlah Motor", jml_motor)
+colD.metric("Lunas", jml_lunas)
+colE.metric("Belum Bayar", jml_belum_bayar)
+
+st.metric("Total Pendapatan (Lunas)", f"Rp {total_pendapatan:,}")
