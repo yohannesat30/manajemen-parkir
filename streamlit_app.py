@@ -6,9 +6,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import io
 import re
-import qrcode
-from PIL import Image
-import base64
+import segno
 import os
 
 # -------------------------------
@@ -25,47 +23,47 @@ KNOWN_BRANDS = {"Toyota", "Honda", "Suzuki", "Daihatsu", "Yamaha", "Kawasaki", "
 class Node:
     def __init__(self, nomor_polisi, jenis_kendaraan, waktu_masuk_str,
                  metode_bayar="Cash", merk="Other", waktu_keluar_str=None, status_bayar="Belum Dibayar"):
-        # basic fields
-        self.nomor_polisi = nomor_polisi
+        self.nomor_polisi = nomor_polisi.strip().upper()
         self.jenis_kendaraan = jenis_kendaraan  # "Mobil" / "Motor"
         self.merk = merk if merk in KNOWN_BRANDS else "Other"
         self.metode_bayar = metode_bayar
         self.status_bayar = status_bayar
 
-        # waktu masuk
-        # expect HH:MM or ISO string; try parse robustly
+        # Parse waktu masuk (we store full ISO datetimes internally)
+        # Accept either HH:MM (today) or ISO string
         try:
-            self.waktu_masuk = datetime.strptime(waktu_masuk_str, "%H:%M")
-            # assign today's date to waktu_masuk for duration calc
-            self.waktu_masuk = datetime.combine(datetime.now().date(), self.waktu_masuk.time())
+            if len(waktu_masuk_str) == 5 and ":" in waktu_masuk_str:
+                t = datetime.strptime(waktu_masuk_str, "%H:%M").time()
+                self.waktu_masuk = datetime.combine(datetime.now().date(), t)
+            else:
+                self.waktu_masuk = datetime.fromisoformat(waktu_masuk_str)
         except Exception:
-            # fallback: try full ISO
-            self.waktu_masuk = datetime.fromisoformat(waktu_masuk_str)
+            # fallback to now
+            self.waktu_masuk = datetime.now()
 
-        # optional waktu keluar; if None => kendaraan masih terparkir
+        # waktu keluar optional
         if waktu_keluar_str:
             try:
-                t = datetime.strptime(waktu_keluar_str, "%H:%M")
-                self.waktu_keluar = datetime.combine(datetime.now().date(), t.time())
+                if len(waktu_keluar_str) == 5 and ":" in waktu_keluar_str:
+                    t = datetime.strptime(waktu_keluar_str, "%H:%M").time()
+                    self.waktu_keluar = datetime.combine(self.waktu_masuk.date(), t)
+                else:
+                    self.waktu_keluar = datetime.fromisoformat(waktu_keluar_str)
             except Exception:
-                self.waktu_keluar = datetime.fromisoformat(waktu_keluar_str)
+                self.waktu_keluar = None
         else:
             self.waktu_keluar = None
 
-        # If no exit time, simulate none (still parked) OR compute if exit set
+        # duration
         if self.waktu_keluar:
             self.durasi_parkir = self.waktu_keluar - self.waktu_masuk
         else:
             self.durasi_parkir = datetime.now() - self.waktu_masuk
 
-        # biaya (hourly rounding up)
         self.biaya_parkir = self.hitung_biaya()
-
-        # next pointer for linked list
         self.next = None
 
     def hitung_biaya(self):
-        # durasi in hours rounded up
         seconds = max(0, int(self.durasi_parkir.total_seconds()))
         jam = seconds // 3600
         if seconds % 3600 != 0:
@@ -89,29 +87,18 @@ class Node:
             "Biaya (Rp)": self.biaya_parkir
         }
 
-# Advanced OOP: iterable linked list and serialization
 class DataParkir:
     def __init__(self):
         self.head = None
 
-    # iterator protocol
     def __iter__(self):
         cur = self.head
         while cur:
             yield cur
             cur = cur.next
 
-    def __len__(self):
-        # count nodes
-        cnt = 0
-        cur = self.head
-        while cur:
-            cnt += 1
-            cur = cur.next
-        return cnt
-
     def add(self, nomor_polisi, jenis, waktu, metode="Cash", merk="Other"):
-        node = Node(nomor_polisi.strip().upper(), jenis, waktu, metode, merk)
+        node = Node(nomor_polisi, jenis, waktu, metode, merk)
         if not self.head:
             self.head = node
         else:
@@ -152,52 +139,59 @@ class DataParkir:
         rows = []
         for n in self:
             d = n.to_dict()
-            # human-friendly fields
-            d["Masuk_h"] = datetime.fromisoformat(d["Masuk"]).strftime("%Y-%m-%d %H:%M")
-            d["Keluar_h"] = d["Keluar"] and datetime.fromisoformat(d["Keluar"]).strftime("%Y-%m-%d %H:%M") or ""
-            d["Durasi_h"] = str(timedelta(seconds=d["Durasi_s"]))
+            masuk_h = datetime.fromisoformat(d["Masuk"]).strftime("%Y-%m-%d %H:%M")
+            keluar_h = d["Keluar"] and datetime.fromisoformat(d["Keluar"]).strftime("%Y-%m-%d %H:%M") or ""
+            durasi_h = str(timedelta(seconds=d["Durasi_s"]))
             rows.append({
                 "Nomor Polisi": d["Nomor Polisi"],
                 "Jenis": d["Jenis"],
                 "Merk": d["Merk"],
                 "Metode Bayar": d["Metode Bayar"],
                 "Status": d["Status"],
-                "Masuk": d["Masuk_h"],
-                "Keluar": d["Keluar_h"],
-                "Durasi": d["Durasi_h"],
+                "Masuk": masuk_h,
+                "Keluar": keluar_h,
+                "Durasi": durasi_h,
                 "Biaya (Rp)": d["Biaya (Rp)"]
             })
-        return pd.DataFrame(rows)
+        if rows:
+            return pd.DataFrame(rows)
+        else:
+            # empty df with columns
+            cols = ["Nomor Polisi","Jenis","Merk","Metode Bayar","Status","Masuk","Keluar","Durasi","Biaya (Rp)"]
+            return pd.DataFrame(columns=cols)
 
-    # persistence -> save all nodes to CSV
     def save_to_csv(self, filepath=DATA_FILE):
         df = pd.DataFrame([n.to_dict() for n in self])
         df.to_csv(filepath, index=False)
 
     def load_from_csv(self, filepath=DATA_FILE):
-        if not os.path.exists(filepath):
-            return
-        df = pd.read_csv(filepath)
-        # clear current
+        if isinstance(filepath, io.IOBase):
+            # file-like (uploaded)
+            df = pd.read_csv(filepath)
+        else:
+            if not os.path.exists(filepath):
+                return
+            df = pd.read_csv(filepath)
+        # rebuild linked list
         self.head = None
         for _, row in df.iterrows():
+            masuk = row.get("Masuk") or row.get("Masuk")
+            keluar = row.get("Keluar", "")
             self.add(
                 row["Nomor Polisi"],
                 row["Jenis"],
-                # ensure time string: read Masuk iso
-                datetime.fromisoformat(row["Masuk"]).strftime("%H:%M"),
+                masuk,
                 row.get("Metode Bayar", "Cash"),
                 row.get("Merk", "Other")
             )
-            # set status and waktu_keluar if present
             node = self.search(row["Nomor Polisi"])
             node.status_bayar = row.get("Status", "Belum Dibayar")
-            if row.get("Keluar", ""):
+            if keluar and isinstance(keluar, str) and keluar.strip() != "":
                 try:
-                    node.waktu_keluar = datetime.fromisoformat(row["Keluar"])
+                    node.waktu_keluar = datetime.fromisoformat(keluar)
                 except Exception:
                     node.waktu_keluar = None
-            # recompute duration and biaya
+            # recompute durations and biaya
             node.durasi_parkir = (node.waktu_keluar - node.waktu_masuk) if node.waktu_keluar else (datetime.now() - node.waktu_masuk)
             node.biaya_parkir = node.hitung_biaya()
 
@@ -210,19 +204,15 @@ def valid_plate(plate):
 def gen_random_plate():
     return f"{random.choice(['B','D','AB','Z'])} {random.randint(100,9999)} {''.join(random.choices(string.ascii_uppercase, k=2))}"
 
-def generate_qr_image(text):
-    # returns PIL image
-    qr = qrcode.QRCode(box_size=6, border=2)
-    qr.add_data(text)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    return img
-
-def img_to_bytes(img: Image.Image):
+def generate_qr_bytes(text):
+    """
+    Return PNG bytes for given text using segno (no external pillow needed).
+    """
+    qr = segno.make(text)
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    qr.save(buf, kind='png', scale=6)  # scale controls size
     buf.seek(0)
-    return buf
+    return buf.read()
 
 # -------------------------------
 # Streamlit App UI
@@ -232,7 +222,7 @@ st.set_page_config(page_title="Sistem Parkir Lengkap", layout="wide")
 # init manager and load data
 if "parkir" not in st.session_state:
     st.session_state.parkir = DataParkir()
-    # load from file if exists
+    # try to load if file exists
     st.session_state.parkir.load_from_csv(DATA_FILE)
 
 parkir = st.session_state.parkir
@@ -240,7 +230,7 @@ parkir = st.session_state.parkir
 # Sidebar menu
 menu = st.sidebar.radio("📌 Menu", ["Dashboard", "Input Kendaraan", "Pencarian & Pembayaran", "Data Parkir", "Admin / Export"])
 
-st.title("🏢 Sistem Manajemen Parkir (Lengkap)")
+st.title("🏢 Sistem Manajemen Parkir (Streamlit)")
 
 # ---------------- Dashboard ----------------
 if menu == "Dashboard":
@@ -248,12 +238,11 @@ if menu == "Dashboard":
     data = parkir.all_data()
     df = parkir.to_df()
 
-    total_pendapatan = sum(n.biaya_parkir for n in data)
+    total_pendapatan = sum(n.biaya_parkir for n in data) if data else 0
     jml_mobil = len([n for n in data if n.jenis_kendaraan == "Mobil"])
     jml_motor = len([n for n in data if n.jenis_kendaraan == "Motor"])
     jml_belum_bayar = len([n for n in data if n.status_bayar == "Belum Dibayar"])
     jml_lunas = len([n for n in data if n.status_bayar == "Sudah Dibayar"])
-    jml_nodes = len(data)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Pendapatan", f"Rp {total_pendapatan:,}")
@@ -269,7 +258,6 @@ if menu == "Dashboard":
     st.write(merk_summary)
 
     st.subheader("Notifikasi: Kendaraan > 24 jam (Kemungkinan Tinggal)")
-    # kendaraan yang masih parkir (waktu_keluar is None) dan durasi > 24h
     old = []
     for n in data:
         dur = (datetime.now() - n.waktu_masuk) if not n.waktu_keluar else (n.waktu_keluar - n.waktu_masuk)
@@ -277,12 +265,12 @@ if menu == "Dashboard":
             old.append((n.nomor_polisi, n.merk, dur))
     if old:
         for p, m, d in old:
-            st.warning(f"{p} ({m}) - sudah {d} terparkir (>24 jam).")
+            st.warning(f"{p} ({m}) - sudah {str(d)} terparkir (>24 jam).")
     else:
         st.success("Tidak ada kendaraan yang terparkir lebih dari 24 jam.")
 
     st.write("---")
-    st.subheader("Data Terbaru")
+    st.subheader("Data Terakhir")
     st.dataframe(df, use_container_width=True)
 
 # ---------------- Input Kendaraan ----------------
@@ -300,7 +288,6 @@ if menu == "Input Kendaraan":
     metode = st.selectbox("Metode Pembayaran", DEFAULT_PAYMENT_METHODS)
 
     if st.button("Tambah Data"):
-        # validation
         if not inp_nopol.strip():
             st.error("Nomor polisi wajib diisi.")
         elif not valid_plate(inp_nopol):
@@ -309,19 +296,17 @@ if menu == "Input Kendaraan":
             time_str = inp_waktu.strftime("%H:%M")
             parkir.add(inp_nopol, inp_jenis, time_str, metode, inp_merk)
             st.success("Data berhasil ditambahkan.")
-            # auto save
             parkir.save_to_csv(DATA_FILE)
 
     st.write("---")
-    st.subheader("Contoh QR Ticket")
+    st.subheader("Contoh QR Ticket (preview dari input saat ini)")
     if st.button("Generate contoh tiket QR (dari input saat ini)"):
         if not valid_plate(inp_nopol):
             st.error("Nomor polisi belum valid.")
         else:
             text = f"PLAT:{inp_nopol.strip().upper()}|JENIS:{inp_jenis}|MERK:{inp_merk}|WAKTU:{datetime.now().isoformat()}"
-            img = generate_qr_image(text)
-            buf = img_to_bytes(img)
-            st.image(buf)
+            png_bytes = generate_qr_bytes(text)
+            st.image(png_bytes, caption="QR Ticket (PNG)", use_column_width=False)
             st.code(text)
 
 # ---------------- Pencarian & Pembayaran ----------------
@@ -349,7 +334,6 @@ if menu == "Pencarian & Pembayaran":
             node = parkir.search(key)
             if node:
                 node.status_bayar = "Sudah Dibayar"
-                # if belum keluar, set waktu_keluar sekarang -> selesai transaksi
                 if not node.waktu_keluar:
                     node.waktu_keluar = datetime.now()
                 node.durasi_parkir = node.waktu_keluar - node.waktu_masuk
@@ -365,14 +349,10 @@ if menu == "Pencarian & Pembayaran":
     if st.button("Generate QR Ticket"):
         node = parkir.search(key2)
         if node:
-            text = f"PLAT:{node.nomor_polisi}|ID:{node.nomor_polisi}|MASUK:{node.waktu_masuk.isoformat()}|BIAYA:{node.biaya_parkir}"
-            img = generate_qr_image(text)
-            st.image(img_to_bytes(img))
-            # provide download link for PNG
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            buf.seek(0)
-            st.download_button("Download QR PNG", data=buf, file_name=f"ticket_{node.nomor_polisi}.png", mime="image/png")
+            text = f"PLAT:{node.nomor_polisi}|MASUK:{node.waktu_masuk.isoformat()}|BIAYA:{node.biaya_parkir}"
+            png_bytes = generate_qr_bytes(text)
+            st.image(png_bytes, caption="QR Ticket (PNG)")
+            st.download_button("Download QR PNG", data=png_bytes, file_name=f"ticket_{node.nomor_polisi}.png", mime="image/png")
         else:
             st.error("Data tidak ditemukan untuk QR.")
 
@@ -404,10 +384,8 @@ if menu == "Admin / Export":
     uploaded = st.file_uploader("Import CSV (format export)", type=["csv"])
     if uploaded:
         try:
-            df = pd.read_csv(uploaded)
-            # simple import: replace current data
-            st.session_state.parkir = DataParkir()
-            st.session_state.parkir.load_from_csv(uploaded)
+            parkir.load_from_csv(uploaded)
+            parkir.save_to_csv(DATA_FILE)  # persist imported
             st.success("Import berhasil.")
         except Exception as e:
             st.error(f"Gagal import: {e}")
@@ -418,9 +396,9 @@ if menu == "Admin / Export":
         csv = df.to_csv(index=False).encode('utf-8')
         st.download_button("Download CSV", data=csv, file_name="parkir_export.csv", mime="text/csv")
 
-# ---------------- End ----------------
 st.write("---")
-st.caption("Aplikasi Parkir: fitur lengkap (validation, QR, persistence, notifikasi).")
+st.caption("Aplikasi Parkir: fitur lengkap (validation, QR via segno, persistence, notifikasi >24h).")
+
 
 
 
