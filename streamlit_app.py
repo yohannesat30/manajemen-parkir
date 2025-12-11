@@ -1,5 +1,5 @@
 import streamlit as st
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date, time
 import pandas as pd
 
 # ===============================
@@ -143,18 +143,21 @@ else:
 st.header("➕ Input Kendaraan Masuk")
 nopol = st.text_input("Nomor Polisi")
 jenis = st.selectbox("Jenis", ["Mobil", "Motor"])
-waktu_manual = st.text_input("Waktu Masuk (Format: YYYY-MM-DD HH:MM)", datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+# Pilih tanggal dan jam manual
+tanggal = st.date_input("Tanggal Masuk", date.today())
+jam = st.time_input("Jam Masuk", datetime.now().time().replace(second=0, microsecond=0))
+waktu_manual = datetime.combine(tanggal, jam)
 
 if st.button("Tambah Kendaraan"):
     if not nopol.strip():
         st.error("Nomor polisi wajib diisi.")
     else:
         try:
-            dt_masuk = datetime.strptime(waktu_manual.strip(), "%Y-%m-%d %H:%M")
-            manager.add(nopol, jenis, dt_masuk.strftime("%Y-%m-%d %H:%M"))
+            manager.add(nopol, jenis, waktu_manual.strftime("%Y-%m-%d %H:%M"))
             st.success("Data berhasil ditambahkan.")
         except:
-            st.error("Format waktu salah. Gunakan 'YYYY-MM-DD HH:MM'.")
+            st.error("Terjadi kesalahan saat menambahkan data.")
 
 # Cari / Hapus kendaraan
 st.header("🔍 Cari / Hapus Data Kendaraan")
