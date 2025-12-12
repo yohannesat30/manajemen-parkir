@@ -1,6 +1,5 @@
 import streamlit as st
 import random
-import string
 from datetime import datetime, timedelta
 import pandas as pd
 import os
@@ -121,22 +120,6 @@ if "parkir" not in st.session_state:
     st.session_state.parkir = DataParkir()
 parkir = st.session_state.parkir
 parkir.load_from_file()  # load data dari file CSV
-
-# ===============================
-#    Generate Sample Data
-# ===============================
-def generate_data():
-    jenis = ["Mobil", "Motor"]
-    for _ in range(20):
-        nomor = f"B {random.randint(1000,9999)} {''.join(random.choices(string.ascii_uppercase, k=3))}"
-        j = random.choice(jenis)
-        w = f"{random.randint(6,22)}:{random.randint(0,59):02d}"
-        parkir.add(nomor, j, w)
-
-if st.button("Generate Data Parkir (Simulasi Bisnis)"):
-    generate_data()
-    st.success("Data simulasi berhasil ditambahkan!")
-    parkir.save_to_file()
 
 # ===============================
 #         INPUT DATA
