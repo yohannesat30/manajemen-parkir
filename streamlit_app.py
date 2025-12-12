@@ -8,15 +8,20 @@ import os
 #     DATA MODEL (LINKED LIST)
 # ===============================
 class Node:
+    """Representasi satu kendaraan (Node) dalam Linked List parkir."""
     def __init__(self, nomor_polisi, jenis_kendaraan, waktu_masuk):
         self.nomor_polisi = nomor_polisi
         self.jenis_kendaraan = jenis_kendaraan
-        # Mengubah string waktu ("HH:MM") menjadi objek datetime
-        self.waktu_masuk = datetime.strptime(waktu_masuk, "%H:%M").replace(year=datetime.now().year, month=datetime.now().month, day=datetime.now().day)
-        
+        # Mengubah string waktu ("HH:MM") menjadi objek datetime pada hari ini
+        try:
+            time_obj = datetime.strptime(waktu_masuk, "%H:%M").time()
+            self.waktu_masuk = datetime.combine(datetime.now().date(), time_obj)
+        except ValueError:
+            # Fallback jika format salah, gunakan waktu sekarang
+            self.waktu_masuk = datetime.now()
+
         # --- Simulasi Parkir: Waktu Keluar & Biaya ---
-        # Random waktu keluar (simulasi bisnis parkir)
-        lama = random.randint(30, 720)  # 30 menit – 12 jam
+        lama = random.randint(30, 720)  # Durasi parkir 30 menit – 12 jam
         self.waktu_keluar = self.waktu_masuk + timedelta(minutes=lama)
         self.durasi_parkir = self.waktu_keluar - self.waktu_masuk
         self.biaya_parkir = self.hit_biaya()
@@ -24,20 +29,28 @@ class Node:
         self.next = None
 
     def hit_biaya(self):
-        # Hitung durasi dalam jam, minimal 1 jam.
+        """Menghitung biaya parkir berdasarkan jenis kendaraan dan durasi."""
         # total_seconds() // 3600 menghitung total jam bulat ke bawah
         jam_parkir = int(self.durasi_parkir.total_seconds() // 3600)
-        # Jika durasi < 1 jam, dihitung 1 jam
-        jam = max(1, jam_parkir + (1 if self.durasi_parkir.total_seconds() % 3600 > 0 else 0))
         
-        # Logika Biaya (Jam pertama + Jam berikutnya)
+        # Hitung jam yang dikenakan biaya: (Pembulatan ke atas)
+        # Jika ada sisa detik > 0, tambahkan 1 jam. Minimal 1 jam.
+        jam = jam_parkir
+        if self.durasi_parkir.total_seconds() % 3600 > 0:
+            jam += 1
+        jam = max(1, jam)
+        
+        # Logika Biaya: Jam pertama + (Jam sisanya * Tarif berikutnya)
         if self.jenis_kendaraan == "Mobil":
-            # 5000 (jam pertama) + (jam sisanya * 3000)
+            # Tarif: Rp 5.000 (jam 1) + Rp 3.000 (jam berikutnya)
             return 5000 + (jam - 1) * 3000
+        
         # Untuk Motor
+        # Tarif: Rp 3.000 (jam 1) + Rp 2.000 (jam berikutnya)
         return 3000 + (jam - 1) * 2000
 
 class DataParkir:
+    """Manajemen data parkir menggunakan struktur Linked List."""
     def __init__(self):
         self.head = None
         
@@ -83,6 +96,7 @@ class DataParkir:
         return data
 
     def to_df(self, data_list):
+        """Mengubah list Node menjadi Pandas DataFrame."""
         return pd.DataFrame([
             {
                 "Nomor Polisi": d.nomor_polisi,
@@ -100,32 +114,18 @@ class DataParkir:
     #       File Handling
     # ===============================
     def save_to_file(self, filename="data_parkir.csv"):
-        # Hanya simpan jika ada data
+        """Menyimpan data parkir ke file CSV."""
         data_list = self.all_data()
         if data_list:
             df = self.to_df(data_list)
             df.to_csv(filename, index=False)
         elif os.path.exists(filename):
-            # Jika data kosong, hapus file lama (agar tidak memuat data di sesi berikutnya)
+            # Jika data kosong, hapus file lama
             os.remove(filename)
 
-    def load_from_file(self, filename="data_parkir.csv"):
-        # Fungsi ini yang menyebabkan data muncul tiba-tiba. 
-        # Saya biarkan di sini tapi tidak dipanggil di Streamlit untuk memenuhi permintaan user.
-        if os.path.exists(filename):
-            df = pd.read_csv(filename)
-            for _, row in df.iterrows():
-                # Pastikan waktu masuk dibaca sebagai string HH:MM
-                self.add(row["Nomor Polisi"], row["Jenis"], row["Masuk"])
-                node = self.search(row["Nomor Polisi"])
-                node.metode_bayar = row.get("Metode Bayar", None)
-
-    # ===============================
-    #    Kendaraan > 24 jam
-    # ===============================
     def check_long_park(self):
+        """Mengecek kendaraan yang parkir lebih dari 24 jam."""
         long_park = []
-        # Tambahkan tanggal hari ini ke durasi 24 jam untuk perbandingan yang lebih baik
         batas_24_jam = timedelta(hours=24)
         for d in self.all_data():
             if d.durasi_parkir > batas_24_jam:
@@ -143,9 +143,8 @@ if "parkir" not in st.session_state:
     st.session_state.parkir = DataParkir()
 parkir = st.session_state.parkir
 
-# --- DI SINI ANDA MENGHAPUS PEMUATAN DATA OTOMATIS ---
-# parkir.load_from_file() 
-# Jika baris di atas diaktifkan, data akan dimuat dari CSV setiap refresh.
+# --- PENTING: Pemuatan otomatis data parkir dari file dinonaktifkan di sini ---
+# parkir.load_from_file() # Baris ini dikomentari/dihapus sesuai permintaan user.
 
 # ===============================
 #         INPUT DATA
@@ -153,11 +152,12 @@ parkir = st.session_state.parkir
 st.subheader("➕ Input Kendaraan Masuk")
 col1, col2, col3, col4 = st.columns(4)
 with col1:
+    # Key harus unik jika ingin memanipulasi session state
     inp_nopol = st.text_input("Nomor Polisi", key="nopol_input")
 with col2:
     inp_jenis = st.selectbox("Jenis Kendaraan", ["Mobil", "Motor"], key="jenis_input")
 with col3:
-    # Waktu masuk default adalah waktu saat ini (untuk kemudahan)
+    # Waktu masuk default adalah waktu saat ini
     default_time = datetime.now().strftime("%H:%M")
     inp_waktu = st.text_input("Waktu Masuk (HH:MM)", default_time, key="waktu_input")
 with col4:
@@ -166,17 +166,23 @@ with col4:
 if st.button("Tambah Data"):
     if inp_nopol and inp_waktu:
         try:
-            # Pengecekan format waktu
+            # Validasi format waktu
             datetime.strptime(inp_waktu, "%H:%M")
+            
+            # Tambahkan data
             parkir.add(inp_nopol.upper(), inp_jenis, inp_waktu)
             node = parkir.search(inp_nopol.upper())
             node.metode_bayar = inp_bayar if inp_bayar != "-" else None
-            st.success(f"Data parkir untuk **{inp_nopol.upper()}** ditambahkan!")
+            
+            # Simpan dan notifikasi
             parkir.save_to_file()
-            # Bersihkan input setelah berhasil
-            st.session_state.nopol_input = ""
-            st.session_state.waktu_input = datetime.now().strftime("%H:%M")
-            st.rerun() # Refresh tampilan data
+            st.success(f"Data parkir untuk **{inp_nopol.upper()}** ditambahkan!")
+            
+            # --- Perbaikan Error SessionState ---
+            # Cukup panggil rerun. Streamlit akan merender ulang 
+            # widget input dengan nilai default/kosong.
+            st.rerun() 
+            
         except ValueError:
             st.error("Format Waktu Masuk harus HH:MM (contoh: 08:00).")
     else:
@@ -186,7 +192,7 @@ if st.button("Tambah Data"):
 #        SEARCH / DELETE
 # ===============================
 st.subheader("🔍 Cari atau Hapus Data Parkir")
-search_key = st.text_input("Cari berdasarkan Nomor Polisi").upper()
+search_key = st.text_input("Masukkan Nomor Polisi untuk Dicari/Dihapus").upper()
 c1, c2 = st.columns(2)
 with c1:
     if st.button("Cari Data", key="btn_cari"):
@@ -198,7 +204,7 @@ with c1:
                 f"**Masuk:** {result.waktu_masuk.strftime('%H:%M')}\n"
                 f"**Keluar (Simulasi):** {result.waktu_keluar.strftime('%H:%M')}\n"
                 f"**Durasi:** {str(result.durasi_parkir).split('.')[0]}\n"
-                f"**Biaya:** Rp {result.biaya_parkir:,}\n"
+                f"**Biaya:** Rp {result.biaya_parkir:,.0f}\n"
                 f"**Metode Bayar:** {result.metode_bayar if result.metode_bayar else '-'}"
             )
         else:
