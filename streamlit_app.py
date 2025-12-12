@@ -53,7 +53,7 @@ class DataParkir:
         
     # --- Operasi Linked List Dasar ---
     def add(self, nomor_polisi, jenis, waktu):
-        # Cek duplikasi, tidak boleh ada kendaraan dengan nopol yang sama masuk dua kali
+        # Cek duplikasi
         if self.search(nomor_polisi):
             return False
             
@@ -104,7 +104,6 @@ class DataParkir:
                 "Nomor Polisi": d.nomor_polisi,
                 "Jenis": d.jenis_kendaraan,
                 "Masuk": d.waktu_masuk.strftime("%H:%M"),
-                # Jika belum checkout, tampilkan "-"
                 "Keluar": d.waktu_keluar.strftime("%H:%M") if d.waktu_keluar else "BELUM KELUAR",
                 "Durasi": str(d.durasi_parkir).split('.')[0] if d.durasi_parkir else "-",
                 "Biaya (Rp)": d.biaya_parkir if d.biaya_parkir else "-",
@@ -114,26 +113,25 @@ class DataParkir:
         ])
 
     # ===============================
-    #       Metode Checkout Baru
+    #       Metode Checkout
     # ===============================
     def checkout(self, nomor_polisi, waktu_keluar_str, metode_bayar):
         node = self.search(nomor_polisi)
         if not node:
-            return None # Kendaraan tidak ditemukan
+            return None 
 
         try:
             # 1. Tentukan Waktu Keluar
             time_obj_keluar = datetime.strptime(waktu_keluar_str, "%H:%M").time()
             waktu_keluar = datetime.combine(datetime.now().date(), time_obj_keluar) 
 
-            # Jika waktu keluar lebih awal dari waktu masuk, asumsikan melewati tengah malam (+1 hari)
+            # Handle kasus parkir melewati tengah malam
             if waktu_keluar < node.waktu_masuk:
                  waktu_keluar += timedelta(days=1)
             
             # 2. Hitung Durasi dan Biaya
             node.waktu_keluar = waktu_keluar
             node.durasi_parkir = node.waktu_keluar - node.waktu_masuk
-            # Panggil hit_biaya dari node dan berikan durasi
             node.biaya_parkir = node.hit_biaya(node.durasi_parkir, node.jenis_kendaraan) 
             node.metode_bayar = metode_bayar
             
@@ -169,11 +167,10 @@ class DataParkir:
             os.remove(filename)
 
     def check_long_park(self):
-        """Mengecek kendaraan yang parkir lebih dari 24 jam (hanya yang belum keluar)."""
+        """Mengecek kendaraan yang parkir lebih dari 24 jam."""
         long_park = []
         batas_24_jam = timedelta(hours=24)
         for d in self.all_data():
-            # Jika waktu keluar belum ada, hitung durasi dari waktu masuk sampai sekarang
             if not d.waktu_keluar:
                 durasi_saat_ini = datetime.now() - d.waktu_masuk
                 if durasi_saat_ini > batas_24_jam:
@@ -219,6 +216,27 @@ if st.button("Tambah Data (MASUK)"):
             st.error("Format Waktu Masuk harus HH:MM (contoh: 08:00).")
     else:
         st.error("Nomor polisi dan Waktu Masuk wajib diisi.")
+        
+# --- Fitur CARI Kendaraan (DIJAGA) ---
+st.subheader("🔍 Cari Data Kendaraan Parkir")
+search_key = st.text_input("Masukkan Nomor Polisi untuk Dicari").upper()
+
+if st.button("Cari Kendaraan", key="btn_cari"):
+    result = parkir.search(search_key)
+    if result:
+        # Hitung estimasi durasi dan biaya saat ini untuk ditampilkan
+        durasi_estimasi = datetime.now() - result.waktu_masuk
+        biaya_estimasi = result.hit_biaya(durasi_estimasi, result.jenis_kendaraan)
+        
+        st.info(
+            f"**Nomor Polisi:** {result.nomor_polisi}\n"
+            f"**Jenis:** {result.jenis_kendaraan}\n"
+            f"**Waktu Masuk:** {result.waktu_masuk.strftime('%H:%M')}\n"
+            f"**Durasi Estimasi Saat Ini:** {str(durasi_estimasi).split('.')[0]}\n"
+            f"**Estimasi Biaya Saat Ini:** Rp {biaya_estimasi:,.0f}"
+        )
+    else:
+        st.warning(f"Kendaraan dengan Nomor Polisi **{search_key}** tidak ditemukan di area parkir.")
 
 # ===============================
 #        CHECKOUT / KELUAR
@@ -272,10 +290,8 @@ else:
 # ===============================
 #           KPI SUMMARY
 # ===============================
-# KPI kini hanya menampilkan kendaraan yang *masih* ada (belum checkout)
 st.subheader("📊 Statistik Parkir Saat Ini")
 if data:
-    # Karena biaya dan durasi belum dihitung, hanya hitung jumlah
     jml_mobil = len([d for d in data if d.jenis_kendaraan == "Mobil"])
     jml_motor = len([d for d in data if d.jenis_kendaraan == "Motor"])
     colA, colB = st.columns(2)
@@ -292,7 +308,6 @@ if long_park:
     st.subheader("⚠️ Kendaraan Parkir Lama (> 24 jam)")
     st.warning("Kendaraan berikut telah parkir lebih dari 24 jam.")
     
-    # Buat DataFrame khusus untuk kendaraan yang parkir lama dengan durasi saat ini
     long_park_data = []
     for d in long_park:
         durasi_saat_ini = datetime.now() - d.waktu_masuk
